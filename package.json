@@ -1,0 +1,34 @@
+{
+  "name": "yapnotes",
+  "version": "1.0.0",
+  "description": "Just yap — your meeting notes write themselves. Record, transcribe, and summarize with Claude.",
+  "bin": {
+    "yapnotes": "./bin/setup.js"
+  },
+  "keywords": [
+    "claude",
+    "meeting",
+    "transcript",
+    "summarize",
+    "voice-memos",
+    "raycast",
+    "notes",
+    "yapnotes"
+  ],
+  "author": "mingj7235 <joshuara7235@gmail.com>",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mingj7235/yapnotes"
+  },
+  "homepage": "https://github.com/mingj7235/yapnotes#readme",
+  "engines": {
+    "node": ">=16"
+  },
+  "files": [
+    "bin/",
+    "skills/",
+    "raycast-scripts/",
+    "README.md"
+  ]
+}
