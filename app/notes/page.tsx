@@ -13,16 +13,21 @@ type Note = {
 export default function NotesPage() {
   const [notes, setNotes] = useState<Note[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
   const [query, setQuery] = useState('')
   const [searchResults, setSearchResults] = useState<{ id: string; title: string; excerpt: string; created_at: string }[] | null>(null)
   const [searching, setSearching] = useState(false)
 
-  useEffect(() => {
+  const loadNotes = () => {
+    setLoading(true)
+    setError(false)
     fetch('/api/notes')
       .then(r => r.json())
       .then(data => { setNotes(Array.isArray(data) ? data : []); setLoading(false) })
-      .catch(() => setLoading(false))
-  }, [])
+      .catch(() => { setError(true); setLoading(false) })
+  }
+
+  useEffect(() => { loadNotes() }, [])
 
   const search = async () => {
     if (query.trim().length < 2) return
@@ -91,6 +96,26 @@ export default function NotesPage() {
       {/* Note list */}
       {loading ? (
         <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>불러오는 중...</div>
+      ) : error ? (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: '8px', padding: '2rem', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '1.5rem', marginBottom: '0.5rem' }}>⚠️</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginBottom: '1rem' }}>
+            회의록을 불러오지 못했어요.
+          </div>
+          <button
+            onClick={loadNotes}
+            style={{
+              padding: '0.5rem 1.25rem', background: 'var(--amber)',
+              color: '#000', border: 'none', borderRadius: '6px',
+              fontSize: '0.8rem', fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            다시 시도
+          </button>
+        </div>
       ) : displayNotes.length === 0 ? (
         <div style={{
           background: 'var(--bg-card)', border: '1px solid var(--border)',

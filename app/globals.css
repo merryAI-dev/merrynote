@@ -11,6 +11,12 @@
   --text-muted: #9b8f78;
 }
 
+@media (max-width: 768px) {
+  .main-content {
+    padding-top: 52px;
+  }
+}
+
 @theme inline {
   --color-background: var(--bg);
   --color-foreground: var(--text);

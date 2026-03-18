@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 type WizardStep = 1 | 2 | 3
 type InputMethod = 'mic' | 'file' | 'text'
@@ -108,6 +109,7 @@ export default function UploadPage() {
   const [editedContent, setEditedContent] = useState('')
   const [editedTitle, setEditedTitle] = useState('')
   const [isSaving, setIsSaving] = useState(false)
+  const [pendingCorrections, setPendingCorrections] = useState<{ correction: Correction; checked: boolean }[]>([])
 
   // Done
   const [doneId, setDoneId] = useState('')
@@ -202,8 +204,13 @@ export default function UploadPage() {
         const fd = new FormData()
         fd.append('file', file)
         const res = await fetch('/api/extract', { method: 'POST', body: fd })
+        if (!res.ok) {
+          const text = await res.text().catch(() => '')
+          let msg = text
+          try { msg = JSON.parse(text).error ?? text } catch {}
+          throw new Error(msg || `서버 오류 (${res.status})`)
+        }
         const data = await res.json()
-        if (!res.ok) throw new Error(data.error)
         fullTextRef.current = data.text
         setTranscript(data.text)
         setExtractedFileName(file.name)
@@ -215,11 +222,14 @@ export default function UploadPage() {
       return
     }
 
-    // ── 오디오 파일: /api/transcribe-audio (Groq Whisper) ──
+    // ── 오디오 파일: /api/transcribe-audio (Gemini) ──
     if (AUDIO_EXTS.includes(ext)) {
       const sizeMB = file.size / (1024 * 1024)
-      if (sizeMB > 25) {
-        setError(`파일이 너무 큽니다 (${sizeMB.toFixed(1)}MB / 최대 25MB).\n긴 녹음은 분할하거나 브라우저 녹음을 사용해주세요.`)
+      if (sizeMB > 4.3) {
+        setError(
+          `파일이 ${sizeMB.toFixed(1)}MB로 업로드 한도(4.3MB)를 초과해요.\n` +
+          `짧은 클립이나 브라우저 녹음 탭을 사용해주세요 🎙️`
+        )
         return
       }
       setIsExtracting(true)
@@ -228,8 +238,13 @@ export default function UploadPage() {
         const fd = new FormData()
         fd.append('file', file)
         const res = await fetch('/api/transcribe-audio', { method: 'POST', body: fd })
+        if (!res.ok) {
+          const text = await res.text().catch(() => '')
+          let msg = text
+          try { msg = JSON.parse(text).error ?? text } catch {}
+          throw new Error(msg || `서버 오류 (${res.status})`)
+        }
         const data = await res.json()
-        if (!res.ok) throw new Error(data.error)
         fullTextRef.current = data.text
         setTranscript(data.text)
         setExtractedFileName(`✅ ${file.name} (${data.sizeMB}MB 전사 완료)`)
@@ -262,7 +277,12 @@ export default function UploadPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ transcript, title: title.trim() || undefined }),
       })
-      if (!res.ok || !res.body) throw new Error('스트림 연결 실패')
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => '')
+        let msg = text
+        try { msg = JSON.parse(text).error ?? text } catch {}
+        throw new Error(msg || `스트림 연결 실패 (${res.status})`)
+      }
 
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -314,19 +334,30 @@ export default function UploadPage() {
   }
 
   // ─── Approve ─────────────────────────────────────────────────────────────────
-  const approve = async () => {
-    setError('')
+  // 1단계: 저장 버튼 클릭 → 교정 목록 계산 → 확인 패널 표시
+  const requestApprove = () => {
     const found = findCorrections(streamedContent, editedContent)
-    setCorrections(found)
+    if (found.length > 0) {
+      setPendingCorrections(found.map(c => ({ correction: c, checked: true })))
+    } else {
+      setPendingCorrections([])
+      void approve([])
+    }
+  }
+
+  // 2단계: 확인된 교정만 저장
+  const approve = async (checkedCorrections: Correction[]) => {
+    setError('')
+    setCorrections(checkedCorrections)
     setIsSaving(true)
 
     try {
-      // 교정 단어 → 단어장 자동 저장
-      if (found.length > 0) {
+      // 선택된 교정 단어만 단어장에 저장
+      if (checkedCorrections.length > 0) {
         const vRes = await fetch('/api/vocab')
         const { glossary } = await vRes.json() as { glossary: string }
         const today = new Date().toISOString().slice(0, 10)
-        const newLines = found.map(c => `- ${c.from} → ${c.to}`).join('\n')
+        const newLines = checkedCorrections.map(c => `- ${c.from} → ${c.to}`).join('\n')
         const marker = '## 음성인식 자동교정'
         const updated = glossary.includes(marker)
           ? glossary.replace(marker, `${marker}\n<!-- ${today} -->\n${newLines}`)
@@ -349,10 +380,16 @@ export default function UploadPage() {
           word_count: editedContent.split(/\s+/).filter(Boolean).length,
         }),
       })
+      if (!saveRes.ok) {
+        const text = await saveRes.text().catch(() => '')
+        let msg = text
+        try { msg = JSON.parse(text).error ?? text } catch {}
+        throw new Error(msg || `저장 실패 (${saveRes.status})`)
+      }
       const saveData = await saveRes.json()
-      if (!saveRes.ok) throw new Error(saveData.error)
 
       setDoneId(saveData.id)
+      setPendingCorrections([])
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '저장 오류')
     } finally {
@@ -364,7 +401,7 @@ export default function UploadPage() {
     setStep(1); setMethod(null); setTitle(''); setTranscript('')
     setInterimText(''); setIsRecording(false); setRecTime(0)
     setStreamedContent(''); setStreamedTitle(''); setEditedContent(''); setEditedTitle('')
-    setDoneId(''); setCorrections([]); setWordCount(0); setError('')
+    setDoneId(''); setCorrections([]); setWordCount(0); setError(''); setPendingCorrections([])
     setExtractedFileName(''); setIsExtracting(false)
     fullTextRef.current = ''
   }
@@ -540,6 +577,52 @@ export default function UploadPage() {
           </div>
         )}
 
+        {/* 교정 확인 패널 */}
+        {pendingCorrections.length > 0 && !isSaving && (
+          <div style={{
+            marginTop: '1rem', padding: '0.875rem 1rem',
+            background: 'rgba(245,158,11,0.06)', border: '1px solid rgba(245,158,11,0.25)',
+            borderRadius: '8px',
+          }}>
+            <div style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--amber)', marginBottom: '0.625rem' }}>
+              📝 단어장에 추가할 교정 항목을 선택해주세요
+            </div>
+            {pendingCorrections.map((item, i) => (
+              <label key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem', cursor: 'pointer', fontSize: '0.82rem' }}>
+                <input
+                  type="checkbox"
+                  checked={item.checked}
+                  onChange={() => setPendingCorrections(prev => prev.map((p, j) => j === i ? { ...p, checked: !p.checked } : p))}
+                  style={{ accentColor: 'var(--amber)', width: '14px', height: '14px' }}
+                />
+                <span style={{ color: 'var(--text-muted)', textDecoration: 'line-through' }}>{item.correction.from}</span>
+                <span style={{ color: 'var(--text-muted)' }}>→</span>
+                <span style={{ color: 'var(--teal)', fontWeight: 600 }}>{item.correction.to}</span>
+              </label>
+            ))}
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.75rem' }}>
+              <button
+                onClick={() => approve(pendingCorrections.filter(p => p.checked).map(p => p.correction))}
+                style={{
+                  padding: '0.45rem 1rem', background: 'var(--amber)', color: '#000',
+                  border: 'none', borderRadius: '6px', fontWeight: 700, cursor: 'pointer', fontSize: '0.82rem',
+                }}
+              >
+                선택 항목 저장하기
+              </button>
+              <button
+                onClick={() => approve([])}
+                style={{
+                  padding: '0.45rem 0.875rem', background: 'var(--bg-hover)', color: 'var(--text-muted)',
+                  border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.82rem',
+                }}
+              >
+                교정 없이 저장
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* 액션 바 */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
           <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
@@ -552,12 +635,12 @@ export default function UploadPage() {
             }}>
               ← 다시 생성
             </button>
-            <button onClick={approve} disabled={isSaving} style={{
+            <button onClick={requestApprove} disabled={isSaving || pendingCorrections.length > 0} style={{
               padding: '0.55rem 1.4rem', display: 'flex', alignItems: 'center', gap: '0.5rem',
-              background: isSaving ? 'var(--bg-hover)' : 'var(--amber)',
-              color: isSaving ? 'var(--text-muted)' : '#000',
+              background: isSaving || pendingCorrections.length > 0 ? 'var(--bg-hover)' : 'var(--amber)',
+              color: isSaving || pendingCorrections.length > 0 ? 'var(--text-muted)' : '#000',
               border: 'none', borderRadius: '6px', fontWeight: 700,
-              cursor: isSaving ? 'not-allowed' : 'pointer', fontSize: '0.875rem',
+              cursor: isSaving || pendingCorrections.length > 0 ? 'not-allowed' : 'pointer', fontSize: '0.875rem',
             }}>
               {isSaving && <Spinner color="#888" />}
               {isSaving ? '저장 중...' : '✅ 검수 완료 · 저장'}

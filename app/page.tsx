@@ -1,7 +1,32 @@
+'use client'
+
 import Link from 'next/link'
+import { useState, useEffect } from 'react'
+
+type Stats = { total: number; thisMonth: number; totalWords: number }
 
 export default function DashboardPage() {
   const today = new Date().toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'long' })
+  const [stats, setStats] = useState<Stats | null>(null)
+  const [error, setError] = useState(false)
+
+  useEffect(() => {
+    fetch('/api/notes')
+      .then(r => r.json())
+      .then((notes: { createdAt?: string; word_count?: number }[]) => {
+        if (!Array.isArray(notes)) throw new Error()
+        const thisMonth = new Date().toISOString().slice(0, 7)
+        setStats({
+          total: notes.length,
+          thisMonth: notes.filter(n => n.createdAt?.startsWith(thisMonth)).length,
+          totalWords: notes.reduce((s, n) => s + (n.word_count ?? 0), 0),
+        })
+      })
+      .catch(() => setError(true))
+  }, [])
+
+  const fmt = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+  const val = (v: number | undefined) => stats ? fmt(v ?? 0) : error ? '?' : '—'
 
   return (
     <div style={{ padding: '2rem', maxWidth: '900px' }}>
@@ -14,9 +39,9 @@ export default function DashboardPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
         {[
-          { label: '전체 회의록', value: '—', unit: '', icon: '◇' },
-          { label: '이번 달', value: '—', unit: '', icon: '◈' },
-          { label: '누적 단어', value: '—', unit: '', icon: '◎' },
+          { label: '전체 회의록', value: val(stats?.total), unit: '개', icon: '◇' },
+          { label: '이번 달', value: val(stats?.thisMonth), unit: '개', icon: '◈' },
+          { label: '누적 단어', value: val(stats?.totalWords), unit: '', icon: '◎' },
         ].map(({ label, value, unit, icon }) => (
           <div
             key={label}
@@ -28,7 +53,7 @@ export default function DashboardPage() {
             }}
           >
             <div style={{ fontSize: '1.25rem', marginBottom: '0.5rem', opacity: 0.6 }}>{icon}</div>
-            <div style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--amber)' }}>
+            <div style={{ fontSize: '1.75rem', fontWeight: 700, color: error ? 'var(--text-muted)' : 'var(--amber)' }}>
               {value}<span style={{ fontSize: '0.875rem', color: 'var(--text-muted)', marginLeft: '0.25rem' }}>{unit}</span>
             </div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>{label}</div>
