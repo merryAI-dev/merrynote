@@ -75,15 +75,13 @@ export default function DashboardPage() {
         border: '1px solid rgba(245,158,11,0.2)',
         borderRadius: '8px', padding: '1.25rem',
       }}>
-        <div style={{ fontWeight: 600, marginBottom: '0.75rem', color: 'var(--amber)' }}>
-          ⚙️ 초기 설정 체크리스트
+        <div style={{ fontWeight: 600, marginBottom: '0.5rem', color: 'var(--amber)' }}>
+          💡 시작하는 방법
         </div>
-        <ol style={{ fontSize: '0.875rem', color: 'var(--text-muted)', paddingLeft: '1.25rem', lineHeight: '1.9' }}>
-          <li>AXR팀과 OpenAI Whisper API + Anthropic API 사용 협의</li>
-          <li>Supabase 프로젝트 생성 → <code style={{ background: 'var(--bg-hover)', padding: '0.1rem 0.4rem', borderRadius: '3px', fontSize: '0.8rem' }}>.env.local</code> 설정</li>
-          <li>Supabase에 notes, vocab 테이블 생성</li>
-          <li>API 키 확보 후 환경변수 추가</li>
-        </ol>
+        <p style={{ fontSize: '0.875rem', color: 'var(--text-muted)', lineHeight: '1.75', margin: 0 }}>
+          <strong style={{ color: 'var(--text)' }}>업로드</strong>를 눌러 녹음을 시작하거나 전사 텍스트를 붙여넣으세요.
+          Claude가 자동으로 회의록을 작성해드립니다.
+        </p>
       </div>
     </div>
   )

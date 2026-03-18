@@ -29,10 +29,10 @@ export default function Sidebar() {
       <div style={{ padding: '0 1.25rem 1.5rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
           <span style={{ fontSize: '1.25rem' }}>🎙️</span>
-          <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--amber)' }}>yapnotes</span>
+          <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--amber)' }}>MerryNote</span>
         </div>
         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-          MYSC 회의록 자동화
+          MYSC 회의록 by Claude
         </div>
       </div>
 

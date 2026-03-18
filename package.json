@@ -1,5 +1,5 @@
 {
-  "name": "yapnotes-web",
+  "name": "merrynote",
   "version": "0.1.0",
   "private": true,
   "scripts": {
@@ -15,8 +15,7 @@
     "firebase-admin": "^13.7.0",
     "marked": "^17.0.4",
     "next": "16.1.7",
-    "openai": "^6.32.0",
-    "react": "19.2.3",
+"react": "19.2.3",
     "react-dom": "19.2.3"
   },
   "devDependencies": {

@@ -3,8 +3,8 @@ import './globals.css'
 import Sidebar from '@/components/Sidebar'
 
 export const metadata: Metadata = {
-  title: 'yapnotes — MYSC 회의록',
-  description: '음성 녹음을 자동으로 회의록으로 변환합니다',
+  title: 'MerryNote — MYSC 회의록',
+  description: 'Claude가 음성을 자동으로 회의록으로 변환합니다',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
