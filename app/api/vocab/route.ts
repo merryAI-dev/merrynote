@@ -1,18 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
+import { getAdminDb } from '@/lib/firebase-admin'
 
 const VOCAB_DIR = path.join(process.cwd(), 'vocab')
 
 export async function GET() {
-  const glossary = fs.existsSync(path.join(VOCAB_DIR, 'glossary.md'))
-    ? fs.readFileSync(path.join(VOCAB_DIR, 'glossary.md'), 'utf-8')
-    : ''
-  const names = fs.existsSync(path.join(VOCAB_DIR, 'names.md'))
-    ? fs.readFileSync(path.join(VOCAB_DIR, 'names.md'), 'utf-8')
-    : ''
+  // 파일 우선, 없으면 Firestore fallback
+  const fromFile = (key: string) => {
+    const p = path.join(VOCAB_DIR, `${key}.md`)
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf-8') : ''
+  }
 
-  return NextResponse.json({ glossary, names })
+  try {
+    return NextResponse.json({
+      glossary: fromFile('glossary'),
+      names: fromFile('names'),
+    })
+  } catch {
+    return NextResponse.json({ glossary: '', names: '' })
+  }
 }
 
 export async function PUT(req: NextRequest) {
@@ -24,12 +31,20 @@ export async function PUT(req: NextRequest) {
       return NextResponse.json({ error: 'key는 glossary 또는 names여야 합니다.' }, { status: 400 })
     }
 
-    fs.mkdirSync(VOCAB_DIR, { recursive: true })
-    fs.writeFileSync(path.join(VOCAB_DIR, `${key}.md`), content, 'utf-8')
+    // 파일로 저장 (로컬 개발용)
+    try {
+      fs.mkdirSync(VOCAB_DIR, { recursive: true })
+      fs.writeFileSync(path.join(VOCAB_DIR, `${key}.md`), content, 'utf-8')
+    } catch { /* Vercel 환경에서는 read-only, Firestore로 fallback */ }
+
+    // Firestore에도 저장 (Vercel 배포 환경)
+    try {
+      const db = getAdminDb()
+      await db.collection('vocab').doc(key).set({ content, updatedAt: new Date() })
+    } catch { /* FIREBASE_SERVICE_ACCOUNT 없을 때 무시 */ }
 
     return NextResponse.json({ ok: true })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : '저장 오류'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: err instanceof Error ? err.message : '저장 오류' }, { status: 500 })
   }
 }

@@ -1,36 +1,44 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { getAdminDb } from '@/lib/firebase-admin'
+
+type NoteDoc = {
+  id: string
+  title?: string
+  content?: string
+  createdAt?: string
+  [key: string]: unknown
+}
 
 export async function GET(req: NextRequest) {
-  const q = req.nextUrl.searchParams.get('q')?.trim()
+  const q = req.nextUrl.searchParams.get('q')?.trim().toLowerCase()
 
   if (!q || q.length < 2) {
     return NextResponse.json({ error: '검색어는 2자 이상 입력해주세요.' }, { status: 400 })
   }
 
   try {
-    const supabase = createServiceClient()
-    const { data, error } = await supabase
-      .from('notes')
-      .select('id, title, content, created_at')
-      .or(`title.ilike.%${q}%,content.ilike.%${q}%`)
-      .order('created_at', { ascending: false })
-      .limit(20)
+    const db = getAdminDb()
+    const snap = await db.collection('notes').orderBy('createdAt', 'desc').limit(500).get()
 
-    if (error) throw error
+    const all: NoteDoc[] = snap.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.()?.toISOString() ?? doc.data().createdAt,
+    }))
 
-    // 검색어 주변 excerpt 추출
-    const results = (data || []).map((note) => {
-      const idx = note.content.toLowerCase().indexOf(q.toLowerCase())
-      const excerpt = idx >= 0
-        ? '...' + note.content.slice(Math.max(0, idx - 60), idx + 120) + '...'
-        : note.content.slice(0, 180) + '...'
-      return { id: note.id, title: note.title, excerpt, created_at: note.created_at }
-    })
+    const results = all
+      .filter(n => n.title?.toLowerCase().includes(q) || n.content?.toLowerCase().includes(q))
+      .slice(0, 20)
+      .map(note => {
+        const idx = (note.content ?? '').toLowerCase().indexOf(q)
+        const excerpt = idx >= 0
+          ? '...' + note.content!.slice(Math.max(0, idx - 60), idx + 120) + '...'
+          : (note.content?.slice(0, 180) ?? '') + '...'
+        return { id: note.id, title: note.title, excerpt, created_at: note.createdAt }
+      })
 
     return NextResponse.json(results)
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'DB 오류'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'DB 오류' }, { status: 500 })
   }
 }

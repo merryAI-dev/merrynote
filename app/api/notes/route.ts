@@ -1,19 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServiceClient } from '@/lib/supabase'
+import { getAdminDb } from '@/lib/firebase-admin'
+import { FieldValue } from 'firebase-admin/firestore'
 
 export async function GET() {
   try {
-    const supabase = createServiceClient()
-    const { data, error } = await supabase
-      .from('notes')
-      .select('id, title, word_count, duration_min, created_at')
-      .order('created_at', { ascending: false })
+    const db = getAdminDb()
+    const snap = await db.collection('notes')
+      .orderBy('createdAt', 'desc')
+      .get()
 
-    if (error) throw error
-    return NextResponse.json(data)
+    const notes = snap.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data(),
+      createdAt: doc.data().createdAt?.toDate?.()?.toISOString() ?? doc.data().createdAt,
+    }))
+
+    return NextResponse.json(notes)
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'DB 오류'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'DB 오류' }, { status: 500 })
   }
 }
 
@@ -26,17 +30,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'title과 content는 필수입니다.' }, { status: 400 })
     }
 
-    const supabase = createServiceClient()
-    const { data, error } = await supabase
-      .from('notes')
-      .insert({ title, content, transcript, audio_url, word_count, duration_min })
-      .select()
-      .single()
+    const db = getAdminDb()
+    const ref = await db.collection('notes').add({
+      title,
+      content,
+      transcript: transcript ?? null,
+      audioUrl: audio_url ?? null,
+      wordCount: word_count ?? null,
+      durationMin: duration_min ?? null,
+      createdAt: FieldValue.serverTimestamp(),
+    })
 
-    if (error) throw error
-    return NextResponse.json(data, { status: 201 })
+    return NextResponse.json({ id: ref.id }, { status: 201 })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'DB 오류'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'DB 오류' }, { status: 500 })
   }
 }
