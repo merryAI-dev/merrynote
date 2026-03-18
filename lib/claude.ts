@@ -1,19 +1,5 @@
-// Anthropic API 래퍼 — 회의록 생성
-// AXR팀 승인 후 ANTHROPIC_API_KEY 환경변수 설정 필요
-
-import fs from 'fs'
-import path from 'path'
-
-function loadVocab(): string {
-  const vocabDir = path.join(process.cwd(), 'vocab')
-  const glossary = fs.existsSync(path.join(vocabDir, 'glossary.md'))
-    ? fs.readFileSync(path.join(vocabDir, 'glossary.md'), 'utf-8')
-    : ''
-  const names = fs.existsSync(path.join(vocabDir, 'names.md'))
-    ? fs.readFileSync(path.join(vocabDir, 'names.md'), 'utf-8')
-    : ''
-  return `${glossary}\n\n${names}`
-}
+// Anthropic 스트리밍 래퍼 — 회의록 생성
+import Anthropic from '@anthropic-ai/sdk'
 
 const SYSTEM_PROMPT = `You are a meeting notes assistant for MYSC (임팩트 투자 회사).
 
@@ -64,16 +50,17 @@ When given a transcript, extract key information and organize it into a structur
 
 Return ONLY the markdown content, no other text.`
 
-export async function generateMeetingNotes(
+export async function* streamMeetingNotes(
   title: string,
   transcript: string,
-  durationMin: number = 0,
-): Promise<string> {
+  durationMin: number,
+  vocab: string,
+): AsyncGenerator<string> {
   if (!process.env.ANTHROPIC_API_KEY) {
-    throw new Error('ANTHROPIC_API_KEY가 설정되지 않았습니다. AXR팀 승인 후 .env.local에 추가해주세요.')
+    throw new Error('ANTHROPIC_API_KEY가 설정되지 않았습니다.')
   }
 
-  const vocab = loadVocab()
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   const today = new Date().toISOString().slice(0, 10)
 
   const userMessage = `Title: ${title}
@@ -81,37 +68,29 @@ Date: ${today}
 Duration: ${durationMin}분 (전사 기준)
 
 ## MYSC Vocabulary Reference
-${vocab}
+${vocab || '(단어장 없음)'}
 
 ## Transcript
 ${transcript}`
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': process.env.ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 8192,
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
-    }),
+  const stream = client.messages.stream({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 8192,
+    system: SYSTEM_PROMPT,
+    messages: [{ role: 'user', content: userMessage }],
   })
 
-  if (!res.ok) {
-    const err = await res.text()
-    throw new Error(`Anthropic API 오류: ${res.status} ${err}`)
+  for await (const event of stream) {
+    if (
+      event.type === 'content_block_delta' &&
+      event.delta.type === 'text_delta'
+    ) {
+      yield event.delta.text
+    }
   }
-
-  const data = await res.json()
-  return data.content[0].text.trim()
 }
 
 export function inferTitle(transcript: string): string {
-  // 첫 100자에서 키워드 추출해 제목 추론 (간단한 fallback)
   const snippet = transcript.slice(0, 200).replace(/\n/g, ' ')
   return snippet.length > 50 ? snippet.slice(0, 50) + '...' : snippet || '회의'
 }
