@@ -7,6 +7,7 @@ const navItems = [
   { href: '/', label: '대시보드', icon: '◈' },
   { href: '/notes', label: '회의록', icon: '◇' },
   { href: '/upload', label: '업로드', icon: '△' },
+  { href: '/chat', label: '챗봇', icon: '◉' },
   { href: '/vocab', label: '단어장', icon: '◎' },
 ]
 
