@@ -1,97 +1,107 @@
 'use client'
 
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
-type Stage = 'idle' | 'uploading' | 'transcribing' | 'generating' | 'saving' | 'done' | 'error'
+type Stage = 'idle' | 'recording' | 'transcribed' | 'generating' | 'saving' | 'done' | 'error'
 
 export default function UploadPage() {
   const router = useRouter()
   const [stage, setStage] = useState<Stage>('idle')
   const [title, setTitle] = useState('')
-  const [file, setFile] = useState<File | null>(null)
   const [transcript, setTranscript] = useState('')
-  const [result, setResult] = useState<{ id: string; filename: string } | null>(null)
-  const [error, setError] = useState('')
-  const [dragOver, setDragOver] = useState(false)
-  const [isRecording, setIsRecording] = useState(false)
+  const [interimText, setInterimText] = useState('')
   const [recordingTime, setRecordingTime] = useState(0)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
-  const chunksRef = useRef<Blob[]>([])
+  const [result, setResult] = useState<{ id: string } | null>(null)
+  const [error, setError] = useState('')
+  const [supported, setSupported] = useState(true)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const fullTextRef = useRef('')
 
-  const handleFile = useCallback((f: File) => {
-    setFile(f)
-    setError('')
-    if (!title) setTitle(f.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' '))
-  }, [title])
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getSpeechRecognition = (): any => (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault()
-    setDragOver(false)
-    const f = e.dataTransfer.files[0]
-    if (f) handleFile(f)
-  }, [handleFile])
+  useEffect(() => {
+    if (!getSpeechRecognition()) setSupported(false)
+  }, [])
 
-  const startRecording = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mr = new MediaRecorder(stream, { mimeType: 'audio/webm' })
-      chunksRef.current = []
-      mr.ondataavailable = (e) => chunksRef.current.push(e.data)
-      mr.onstop = () => {
-        const blob = new Blob(chunksRef.current, { type: 'audio/webm' })
-        const f = new File([blob], `녹음-${new Date().toLocaleDateString('ko-KR').replace(/\. /g, '-').replace('.', '')}.webm`, { type: 'audio/webm' })
-        handleFile(f)
-        stream.getTracks().forEach(t => t.stop())
+  const startRecording = () => {
+    const SpeechRecognition = getSpeechRecognition()
+    if (!SpeechRecognition) return
+
+    const recognition = new SpeechRecognition() // eslint-disable-line @typescript-eslint/no-unsafe-call
+    recognition.lang = 'ko-KR'
+    recognition.continuous = true
+    recognition.interimResults = true
+    recognition.maxAlternatives = 1
+
+    fullTextRef.current = ''
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onresult = (e: any) => {
+      let interim = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript
+        if (e.results[i].isFinal) {
+          fullTextRef.current += t + ' '
+        } else {
+          interim += t
+        }
       }
-      mr.start()
-      mediaRecorderRef.current = mr
-      setIsRecording(true)
-      setRecordingTime(0)
-      timerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000)
-    } catch {
-      setError('마이크 접근 권한이 필요합니다.')
+      setTranscript(fullTextRef.current)
+      setInterimText(interim)
     }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    recognition.onerror = (e: any) => {
+      if (e.error !== 'no-speech') {
+        setError(`음성 인식 오류: ${e.error}`)
+        setStage('error')
+      }
+    }
+
+    recognition.onend = () => {
+      // continuous 모드에서 자동 재시작 (stop 버튼 누르기 전까지)
+      if (recognitionRef.current) {
+        try { recognition.start() } catch {}
+      }
+    }
+
+    recognition.start()
+    recognitionRef.current = recognition
+    setStage('recording')
+    setRecordingTime(0)
+    timerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000)
   }
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop()
-      mediaRecorderRef.current = null
+    if (recognitionRef.current) {
+      recognitionRef.current.onend = null
+      recognitionRef.current.stop()
+      recognitionRef.current = null
     }
     if (timerRef.current) clearInterval(timerRef.current)
-    setIsRecording(false)
+    setInterimText('')
+    setStage('transcribed')
   }
 
-  const formatTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
-
-  const process = async () => {
-    if (!file) return
+  const generate = async () => {
+    if (!transcript.trim()) return
     setError('')
 
     try {
-      // 1. 전사
-      setStage('transcribing')
-      const fd = new FormData()
-      fd.append('audio', file)
-      const transRes = await fetch('/api/transcribe', { method: 'POST', body: fd })
-      const transData = await transRes.json()
-      if (!transRes.ok) throw new Error(transData.error)
-      setTranscript(transData.transcript)
-
-      // 2. 회의록 생성
       setStage('generating')
       const genRes = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript: transData.transcript, title: title.trim() || undefined }),
+        body: JSON.stringify({ transcript, title: title.trim() || undefined }),
       })
       const genData = await genRes.json()
       if (!genRes.ok) throw new Error(genData.error)
 
-      // 3. 저장
       setStage('saving')
       const saveRes = await fetch('/api/notes', {
         method: 'POST',
@@ -99,225 +109,207 @@ export default function UploadPage() {
         body: JSON.stringify({
           title: genData.title,
           content: genData.content,
-          transcript: transData.transcript,
+          transcript,
           word_count: genData.wordCount,
         }),
       })
       const saveData = await saveRes.json()
       if (!saveRes.ok) throw new Error(saveData.error)
 
-      setResult({ id: saveData.id, filename: genData.filename })
+      setResult({ id: saveData.id })
       setStage('done')
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : '처리 중 오류가 발생했습니다.')
+      setError(e instanceof Error ? e.message : '오류가 발생했습니다.')
       setStage('error')
     }
   }
 
-  const stageLabels: Record<Stage, string> = {
-    idle: '',
-    uploading: '업로드 중...',
-    transcribing: '🎙️ 음성 전사 중... (1~3분 소요)',
-    generating: '📝 Claude 회의록 생성 중...',
-    saving: '💾 저장 중...',
-    done: '✅ 완료!',
-    error: '❌ 오류',
+  const reset = () => {
+    setStage('idle')
+    setTitle('')
+    setTranscript('')
+    setInterimText('')
+    setResult(null)
+    setError('')
+    fullTextRef.current = ''
   }
 
-  const busy = ['uploading', 'transcribing', 'generating', 'saving'].includes(stage)
+  const formatTime = (s: number) =>
+    `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
+
+  if (stage === 'done' && result) {
+    return (
+      <div style={{ padding: '2rem', maxWidth: '640px' }}>
+        <div style={{
+          background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.3)',
+          borderRadius: '10px', padding: '2rem', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>✅</div>
+          <div style={{ fontWeight: 700, fontSize: '1.1rem', marginBottom: '0.5rem' }}>회의록 생성 완료!</div>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center', marginTop: '1.25rem' }}>
+            <button onClick={() => router.push(`/notes/${result.id}`)} style={{
+              padding: '0.6rem 1.5rem', background: 'var(--amber)', color: '#000',
+              border: 'none', borderRadius: '6px', fontWeight: 700, cursor: 'pointer',
+            }}>
+              회의록 보기 →
+            </button>
+            <button onClick={reset} style={{
+              padding: '0.6rem 1.25rem', background: 'var(--bg-hover)', color: 'var(--text)',
+              border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer',
+            }}>
+              새로 시작
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div style={{ padding: '2rem', maxWidth: '680px' }}>
-      <div style={{ marginBottom: '2rem' }}>
+      <div style={{ marginBottom: '1.75rem' }}>
         <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--amber)', marginBottom: '0.25rem' }}>
-          음성 업로드
+          회의록 만들기
         </h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-          오디오 파일을 올리거나 직접 녹음하면 회의록으로 자동 변환됩니다
+          녹음하거나 전사 텍스트를 붙여넣으면 Claude가 회의록으로 정리해줍니다
         </p>
       </div>
 
-      {stage === 'done' && result ? (
+      {!supported && (
         <div style={{
-          background: 'rgba(20,184,166,0.08)', border: '1px solid rgba(20,184,166,0.3)',
-          borderRadius: '8px', padding: '1.5rem', textAlign: 'center',
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
+          borderRadius: '6px', padding: '0.875rem', marginBottom: '1rem', fontSize: '0.875rem', color: '#ef4444',
         }}>
-          <div style={{ fontSize: '2rem', marginBottom: '0.75rem' }}>✅</div>
-          <div style={{ fontWeight: 600, marginBottom: '0.5rem' }}>회의록이 생성되었습니다!</div>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>{result.filename}</div>
-          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
-            <button
-              onClick={() => router.push(`/notes/${result.id}`)}
-              style={{
-                padding: '0.5rem 1.25rem', background: 'var(--amber)', color: '#000',
-                borderRadius: '6px', border: 'none', fontWeight: 600, cursor: 'pointer', fontSize: '0.875rem',
-              }}
-            >
-              회의록 보기 →
-            </button>
-            <button
-              onClick={() => { setStage('idle'); setFile(null); setTitle(''); setTranscript(''); setResult(null) }}
-              style={{
-                padding: '0.5rem 1.25rem', background: 'var(--bg-hover)', color: 'var(--text)',
-                borderRadius: '6px', border: '1px solid var(--border)', cursor: 'pointer', fontSize: '0.875rem',
-              }}
-            >
-              새로 업로드
-            </button>
-          </div>
-        </div>
-      ) : (
-        <>
-          {/* Drop zone */}
-          <div
-            onDrop={handleDrop}
-            onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-            onDragLeave={() => setDragOver(false)}
-            onClick={() => !file && fileInputRef.current?.click()}
-            style={{
-              border: `2px dashed ${dragOver ? 'var(--amber)' : file ? 'var(--teal)' : 'var(--border)'}`,
-              borderRadius: '10px',
-              padding: '2rem',
-              textAlign: 'center',
-              cursor: file ? 'default' : 'pointer',
-              background: dragOver ? 'rgba(245,158,11,0.05)' : 'var(--bg-card)',
-              transition: 'all 0.2s',
-              marginBottom: '1rem',
-            }}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".m4a,.mp3,.wav,.aiff,.aac,.mp4,.mov,.webm"
-              style={{ display: 'none' }}
-              onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }}
-            />
-            {file ? (
-              <div>
-                <div style={{ fontSize: '1.75rem', marginBottom: '0.5rem' }}>🎵</div>
-                <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>{file.name}</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  {(file.size / (1024 * 1024)).toFixed(1)} MB
-                </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); setFile(null) }}
-                  style={{
-                    marginTop: '0.75rem', padding: '0.25rem 0.75rem', background: 'transparent',
-                    border: '1px solid var(--border)', borderRadius: '4px', color: 'var(--text-muted)',
-                    fontSize: '0.75rem', cursor: 'pointer',
-                  }}
-                >
-                  파일 변경
-                </button>
-              </div>
-            ) : (
-              <div>
-                <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>📂</div>
-                <div style={{ fontWeight: 600, marginBottom: '0.375rem' }}>파일을 드래그하거나 클릭하여 선택</div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  m4a, mp3, wav, aiff, aac, mp4, mov 지원
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* 브라우저 녹음 */}
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '8px', padding: '1rem', marginBottom: '1rem',
-            display: 'flex', alignItems: 'center', gap: '1rem',
-          }}>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: '0.875rem', fontWeight: 500 }}>브라우저 직접 녹음</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                {isRecording ? `녹음 중... ${formatTime(recordingTime)}` : 'iPhone Safari에서도 사용 가능'}
-              </div>
-            </div>
-            <button
-              onClick={isRecording ? stopRecording : startRecording}
-              style={{
-                padding: '0.5rem 1rem',
-                background: isRecording ? '#ef4444' : 'rgba(245,158,11,0.1)',
-                color: isRecording ? '#fff' : 'var(--amber)',
-                border: `1px solid ${isRecording ? '#ef4444' : 'rgba(245,158,11,0.3)'}`,
-                borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
-              }}
-            >
-              {isRecording ? '⏹ 중지' : '⏺ 녹음 시작'}
-            </button>
-          </div>
-
-          {/* Title input */}
-          <div style={{ marginBottom: '1rem' }}>
-            <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.375rem' }}>
-              회의 제목 (선택)
-            </label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="입력하지 않으면 내용에서 자동 추출"
-              style={{
-                width: '100%', padding: '0.625rem 0.875rem',
-                background: 'var(--bg-card)', border: '1px solid var(--border)',
-                borderRadius: '6px', color: 'var(--text)', fontSize: '0.875rem', outline: 'none',
-              }}
-            />
-          </div>
-
-          {/* Progress */}
-          {busy && (
-            <div style={{
-              background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
-              borderRadius: '6px', padding: '0.875rem', marginBottom: '1rem',
-              fontSize: '0.875rem', color: 'var(--amber)',
-            }}>
-              <span style={{ marginRight: '0.5rem' }}>⟳</span>
-              {stageLabels[stage]}
-            </div>
-          )}
-
-          {error && (
-            <div style={{
-              background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
-              borderRadius: '6px', padding: '0.875rem', marginBottom: '1rem',
-              fontSize: '0.875rem', color: '#ef4444',
-            }}>
-              {error}
-            </div>
-          )}
-
-          <button
-            onClick={process}
-            disabled={!file || busy}
-            style={{
-              width: '100%', padding: '0.75rem',
-              background: !file || busy ? 'var(--bg-hover)' : 'var(--amber)',
-              color: !file || busy ? 'var(--text-muted)' : '#000',
-              border: 'none', borderRadius: '8px', fontWeight: 700,
-              cursor: !file || busy ? 'not-allowed' : 'pointer', fontSize: '0.9rem',
-              transition: 'all 0.15s',
-            }}
-          >
-            {busy ? stageLabels[stage] : '전사 + 회의록 생성 →'}
-          </button>
-        </>
-      )}
-
-      {/* Transcript preview */}
-      {transcript && stage !== 'idle' && (
-        <div style={{ marginTop: '1.5rem' }}>
-          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>전사 결과 미리보기</div>
-          <div style={{
-            background: 'var(--bg-card)', border: '1px solid var(--border)',
-            borderRadius: '6px', padding: '0.875rem', fontSize: '0.8rem',
-            color: 'var(--text-muted)', maxHeight: '180px', overflowY: 'auto',
-            lineHeight: '1.6', whiteSpace: 'pre-wrap',
-          }}>
-            {transcript.slice(0, 600)}{transcript.length > 600 ? '...' : ''}
-          </div>
+          이 브라우저는 음성 인식을 지원하지 않습니다. Chrome 또는 Safari를 사용해주세요.
         </div>
       )}
+
+      {/* 제목 */}
+      <div style={{ marginBottom: '1rem' }}>
+        <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.375rem' }}>
+          회의 제목 (선택)
+        </label>
+        <input
+          type="text"
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          placeholder="입력하지 않으면 내용에서 자동 추출"
+          disabled={stage === 'recording'}
+          style={{
+            width: '100%', padding: '0.625rem 0.875rem',
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: '6px', color: 'var(--text)', fontSize: '0.875rem', outline: 'none',
+          }}
+        />
+      </div>
+
+      {/* 녹음 버튼 */}
+      {stage !== 'transcribed' && stage !== 'generating' && stage !== 'saving' && (
+        <div style={{
+          background: 'var(--bg-card)', border: `1px solid ${stage === 'recording' ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`,
+          borderRadius: '10px', padding: '1.5rem', textAlign: 'center', marginBottom: '1rem',
+        }}>
+          {stage === 'recording' ? (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
+                <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ef4444', animation: 'pulse 1s infinite' }} />
+                <span style={{ fontWeight: 600, color: '#ef4444' }}>녹음 중</span>
+                <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem', marginLeft: '0.25rem' }}>{formatTime(recordingTime)}</span>
+              </div>
+              <button onClick={stopRecording} style={{
+                padding: '0.75rem 2rem', background: '#ef4444', color: '#fff',
+                border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer', fontSize: '0.9rem',
+              }}>
+                ⏹ 녹음 중지
+              </button>
+            </>
+          ) : (
+            <>
+              <div style={{ fontSize: '2.5rem', marginBottom: '0.75rem' }}>🎙️</div>
+              <button onClick={startRecording} disabled={!supported} style={{
+                padding: '0.75rem 2rem',
+                background: supported ? 'var(--amber)' : 'var(--bg-hover)',
+                color: supported ? '#000' : 'var(--text-muted)',
+                border: 'none', borderRadius: '8px', fontWeight: 700,
+                cursor: supported ? 'pointer' : 'not-allowed', fontSize: '0.9rem',
+              }}>
+                ⏺ 녹음 시작
+              </button>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
+                Chrome · Edge · Safari 지원 · 한국어 자동 인식
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* 전사 텍스트 영역 */}
+      <div style={{ marginBottom: '1rem' }}>
+        <label style={{ display: 'block', fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.375rem' }}>
+          전사 텍스트 {stage === 'recording' && <span style={{ color: '#ef4444' }}>● 실시간 인식 중</span>}
+        </label>
+        <textarea
+          value={transcript + (interimText ? interimText : '')}
+          onChange={e => { if (stage !== 'recording') { setTranscript(e.target.value); fullTextRef.current = e.target.value } }}
+          placeholder="녹음하거나 여기에 전사 텍스트를 직접 붙여넣으세요"
+          readOnly={stage === 'recording'}
+          style={{
+            width: '100%', height: '200px',
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: '8px', padding: '0.875rem',
+            color: stage === 'recording' ? 'var(--text)' : 'var(--text)',
+            fontSize: '0.85rem', lineHeight: '1.7',
+            resize: 'vertical', outline: 'none', fontFamily: 'inherit',
+          }}
+        />
+        {transcript && (
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+            {transcript.split(/\s+/).filter(Boolean).length} 단어
+          </div>
+        )}
+      </div>
+
+      {/* 오류 */}
+      {error && (
+        <div style={{
+          background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.3)',
+          borderRadius: '6px', padding: '0.875rem', marginBottom: '1rem',
+          fontSize: '0.875rem', color: '#ef4444',
+        }}>
+          {error}
+        </div>
+      )}
+
+      {/* 진행 상태 */}
+      {(stage === 'generating' || stage === 'saving') && (
+        <div style={{
+          background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)',
+          borderRadius: '6px', padding: '0.875rem', marginBottom: '1rem',
+          fontSize: '0.875rem', color: 'var(--amber)',
+        }}>
+          {stage === 'generating' ? '📝 Claude가 회의록을 작성하고 있습니다...' : '💾 저장 중...'}
+        </div>
+      )}
+
+      {/* 생성 버튼 */}
+      {stage !== 'recording' && (
+        <button
+          onClick={generate}
+          disabled={!transcript.trim() || stage === 'generating' || stage === 'saving'}
+          style={{
+            width: '100%', padding: '0.75rem',
+            background: transcript.trim() && stage !== 'generating' && stage !== 'saving' ? 'var(--amber)' : 'var(--bg-hover)',
+            color: transcript.trim() && stage !== 'generating' && stage !== 'saving' ? '#000' : 'var(--text-muted)',
+            border: 'none', borderRadius: '8px', fontWeight: 700,
+            cursor: transcript.trim() ? 'pointer' : 'not-allowed', fontSize: '0.9rem',
+          }}
+        >
+          {stage === 'generating' ? 'Claude 작성 중...' : stage === 'saving' ? '저장 중...' : '📝 회의록 생성 →'}
+        </button>
+      )}
+
+      <style>{`@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }`}</style>
     </div>
   )
 }
