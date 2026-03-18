@@ -1,11 +1,8 @@
 {
   "framework": "nextjs",
   "functions": {
-    "app/api/transcribe/route.ts": {
-      "maxDuration": 300
-    },
-    "app/api/generate/route.ts": {
-      "maxDuration": 120
-    }
+    "app/api/generate/route.ts": { "maxDuration": 300 },
+    "app/api/extract/route.ts": { "maxDuration": 60 },
+    "app/api/transcribe-audio/route.ts": { "maxDuration": 120 }
   }
 }

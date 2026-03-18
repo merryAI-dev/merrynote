@@ -1,14 +1,19 @@
 import { NextRequest } from 'next/server'
 import { getAdminDb } from '@/lib/firebase-admin'
-import { streamMeetingNotes, generateFilename, inferTitle } from '@/lib/claude'
+import {
+  needsChunking,
+  streamMeetingNotes,
+  streamChunkedMeetingNotes,
+  generateFilename,
+  inferTitle,
+} from '@/lib/claude'
 
 export const runtime = 'nodejs'
-export const maxDuration = 120
+export const maxDuration = 300  // Vercel Pro: 최대 300초
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
-    const { transcript, title: rawTitle, durationMin = 0 } = body
+    const { transcript, title: rawTitle, durationMin = 0 } = await req.json()
 
     if (!transcript || transcript.trim().length < 10) {
       return new Response(
@@ -17,55 +22,56 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Firestore에서만 단어장 로드 (파일 시스템 X)
+    // Firestore에서 단어장 로드
     const db = getAdminDb()
     const [glossaryDoc, namesDoc] = await Promise.all([
       db.collection('vocab').doc('glossary').get(),
       db.collection('vocab').doc('names').get(),
     ])
-    const vocab = [
-      glossaryDoc.data()?.content ?? '',
-      namesDoc.data()?.content ?? '',
-    ].join('\n\n').trim()
+    const vocab = [glossaryDoc.data()?.content ?? '', namesDoc.data()?.content ?? '']
+      .join('\n\n').trim()
 
     const title = rawTitle?.trim() || inferTitle(transcript)
     const filename = generateFilename(title)
+    const chunked = needsChunking(transcript)
 
     const encoder = new TextEncoder()
 
     const stream = new ReadableStream({
       async start(controller) {
-        try {
-          // 첫 이벤트: 제목 + 파일명 전달
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ type: 'meta', title, filename })}\n\n`,
-            ),
-          )
+        const send = (obj: object) =>
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`))
 
-          let fullContent = ''
-          for await (const chunk of streamMeetingNotes(title, transcript, durationMin, vocab)) {
-            fullContent += chunk
-            controller.enqueue(
-              encoder.encode(
-                `data: ${JSON.stringify({ type: 'delta', text: chunk })}\n\n`,
-              ),
-            )
+        try {
+          send({ type: 'meta', title, filename, chunked })
+
+          if (chunked) {
+            // ── 청크 분할 모드 (긴 전사본) ──────────────────────────────
+            let fullContent = ''
+            for await (const ev of streamChunkedMeetingNotes(title, transcript, durationMin, vocab)) {
+              if (ev.type === 'progress') {
+                send({ type: 'progress', text: ev.text })
+              } else {
+                fullContent += ev.text
+                send({ type: 'delta', text: ev.text })
+              }
+            }
+            const wordCount = fullContent.split(/\s+/).filter(Boolean).length
+            send({ type: 'done', wordCount, content: fullContent })
+
+          } else {
+            // ── 단일 스트리밍 (짧은 전사본) ─────────────────────────────
+            let fullContent = ''
+            for await (const text of streamMeetingNotes(title, transcript, durationMin, vocab)) {
+              fullContent += text
+              send({ type: 'delta', text })
+            }
+            const wordCount = fullContent.split(/\s+/).filter(Boolean).length
+            send({ type: 'done', wordCount, content: fullContent })
           }
 
-          const wordCount = fullContent.split(/\s+/).filter(Boolean).length
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ type: 'done', wordCount, content: fullContent })}\n\n`,
-            ),
-          )
         } catch (err) {
-          const message = err instanceof Error ? err.message : '생성 오류'
-          controller.enqueue(
-            encoder.encode(
-              `data: ${JSON.stringify({ type: 'error', message })}\n\n`,
-            ),
-          )
+          send({ type: 'error', message: err instanceof Error ? err.message : '생성 오류' })
         } finally {
           controller.close()
         }

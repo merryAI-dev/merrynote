@@ -101,6 +101,8 @@ export default function UploadPage() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamedContent, setStreamedContent] = useState('')
   const [streamedTitle, setStreamedTitle] = useState('')
+  const [progressMsg, setProgressMsg] = useState('')   // 청크 처리 진행 메시지
+  const [isChunked, setIsChunked] = useState(false)    // 분할 모드 여부
 
   // Review step
   const [editedContent, setEditedContent] = useState('')
@@ -179,21 +181,22 @@ export default function UploadPage() {
   }, [])
 
   // ─── File extraction ─────────────────────────────────────────────────────────
+  const AUDIO_EXTS = ['m4a', 'mp3', 'mp4', 'wav', 'ogg', 'flac', 'webm', 'aac', 'mpeg', 'caf']
+  const TEXT_EXTS  = ['txt', 'md', 'docx', 'pdf']
+
   const extractFile = async (file: File) => {
     setError('')
-    const ext = file.name.split('.').pop()?.toLowerCase()
+    const ext = file.name.split('.').pop()?.toLowerCase() ?? ''
 
-    // txt/md → client-side (fast, no server round-trip)
-    if (ext === 'txt' || ext === 'md') {
-      const text = await file.text()
-      fullTextRef.current = text
-      setTranscript(text)
-      setExtractedFileName(file.name)
-      return
-    }
-
-    // docx/pdf → server-side API
-    if (['docx', 'pdf'].includes(ext ?? '')) {
+    // ── 텍스트 파일: txt/md → client-side, docx/pdf → /api/extract ──
+    if (TEXT_EXTS.includes(ext)) {
+      if (ext === 'txt' || ext === 'md') {
+        const text = await file.text()
+        fullTextRef.current = text
+        setTranscript(text)
+        setExtractedFileName(file.name)
+        return
+      }
       setIsExtracting(true)
       try {
         const fd = new FormData()
@@ -212,7 +215,34 @@ export default function UploadPage() {
       return
     }
 
-    setError('.txt .md .docx .pdf 형식만 지원합니다.')
+    // ── 오디오 파일: /api/transcribe-audio (Groq Whisper) ──
+    if (AUDIO_EXTS.includes(ext)) {
+      const sizeMB = file.size / (1024 * 1024)
+      if (sizeMB > 25) {
+        setError(`파일이 너무 큽니다 (${sizeMB.toFixed(1)}MB / 최대 25MB).\n긴 녹음은 분할하거나 브라우저 녹음을 사용해주세요.`)
+        return
+      }
+      setIsExtracting(true)
+      setExtractedFileName(`🎵 ${file.name} (${sizeMB.toFixed(1)}MB) 전사 중...`)
+      try {
+        const fd = new FormData()
+        fd.append('file', file)
+        const res = await fetch('/api/transcribe-audio', { method: 'POST', body: fd })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error)
+        fullTextRef.current = data.text
+        setTranscript(data.text)
+        setExtractedFileName(`✅ ${file.name} (${data.sizeMB}MB 전사 완료)`)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '오디오 전사 실패')
+        setExtractedFileName('')
+      } finally {
+        setIsExtracting(false)
+      }
+      return
+    }
+
+    setError('.txt .md .docx .pdf .m4a .mp3 .wav 형식만 지원합니다.')
   }
 
   // ─── Generate (streaming) ─────────────────────────────────────────────────────
@@ -221,6 +251,8 @@ export default function UploadPage() {
     setError('')
     setStreamedContent('')
     setStreamedTitle('')
+    setProgressMsg('')
+    setIsChunked(false)
     setStep(2)
     setIsStreaming(true)
 
@@ -249,10 +281,22 @@ export default function UploadPage() {
           if (!line.startsWith('data: ')) continue
           try {
             const ev = JSON.parse(line.slice(6))
-            if (ev.type === 'meta') { finalTitle = ev.title; setStreamedTitle(ev.title) }
-            else if (ev.type === 'delta') { finalContent += ev.text; setStreamedContent(c => c + ev.text) }
-            else if (ev.type === 'done') { finalContent = ev.content; finalWordCount = ev.wordCount }
-            else if (ev.type === 'error') throw new Error(ev.message)
+            if (ev.type === 'meta') {
+              finalTitle = ev.title
+              setStreamedTitle(ev.title)
+              if (ev.chunked) setIsChunked(true)
+            } else if (ev.type === 'progress') {
+              setProgressMsg(ev.text)   // 청크 처리 진행 상황
+            } else if (ev.type === 'delta') {
+              setProgressMsg('')        // 실제 콘텐츠가 오기 시작하면 progress 숨김
+              finalContent += ev.text
+              setStreamedContent(c => c + ev.text)
+            } else if (ev.type === 'done') {
+              finalContent = ev.content
+              finalWordCount = ev.wordCount
+            } else if (ev.type === 'error') {
+              throw new Error(ev.message)
+            }
           } catch (e) { if (e instanceof SyntaxError) continue; throw e }
         }
       }
@@ -392,17 +436,29 @@ export default function UploadPage() {
     return (
       <div style={{ padding: '2rem', maxWidth: '760px' }}>
         <StepBar step={2} />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: progressMsg ? '0.5rem' : '1rem' }}>
           {isStreaming && <Spinner />}
           <span style={{ fontWeight: 600, color: 'var(--amber)' }}>
             {isStreaming ? 'Claude가 회의록 작성 중...' : '작성 완료 — 검수 화면으로 이동 중'}
           </span>
-          {streamedTitle && (
+          {isChunked && !progressMsg && (
+            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', background: 'var(--bg-hover)', padding: '0.15rem 0.5rem', borderRadius: '99px' }}>
+              분할 처리
+            </span>
+          )}
+          {streamedTitle && !progressMsg && (
             <span style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginLeft: 'auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '240px' }}>
               {streamedTitle}
             </span>
           )}
         </div>
+        {/* 청크 처리 진행 메시지 */}
+        {progressMsg && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '1rem', padding: '0.625rem 0.875rem', background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', borderRadius: '8px' }}>
+            <Spinner color="var(--amber)" />
+            <span style={{ fontSize: '0.85rem', color: 'var(--amber)' }}>{progressMsg}</span>
+          </div>
+        )}
         <div ref={streamBoxRef} style={{
           background: 'var(--bg-card)', border: '1px solid var(--border)',
           borderRadius: '10px', padding: '1.5rem',
@@ -518,7 +574,7 @@ export default function UploadPage() {
   // ════════════════════════════════════════════════════════════════════════════
   const inputMethods = [
     { id: 'mic' as InputMethod, icon: '🎙️', label: '음성 녹음', desc: 'Chrome · Safari · Edge', disabled: !micSupported },
-    { id: 'file' as InputMethod, icon: '📄', label: '파일 업로드', desc: '.txt .md .docx .pdf', disabled: false },
+    { id: 'file' as InputMethod, icon: '📄', label: '파일 업로드', desc: '.m4a .mp3 .docx .pdf 등', disabled: false },
     { id: 'text' as InputMethod, icon: '✍️', label: '텍스트 입력', desc: '직접 붙여넣기', disabled: false },
   ]
 
@@ -627,21 +683,29 @@ export default function UploadPage() {
           ) : (
             <>
               <div style={{ fontSize: '2rem', marginBottom: '0.625rem' }}>📄</div>
-              <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: '0.375rem' }}>
+              <div style={{ fontWeight: 600, fontSize: '0.875rem', marginBottom: '0.5rem' }}>
                 {isDragging ? '여기에 놓으세요' : '클릭하거나 파일을 드래그하세요'}
               </div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                .txt · .md · .docx (Word) · .pdf
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', justifyContent: 'center', marginBottom: '0.5rem' }}>
+                {['.m4a','.mp3','.wav','.ogg','.flac'].map(e => (
+                  <span key={e} style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', background: 'rgba(20,184,166,0.12)', color: 'var(--teal)', borderRadius: '4px' }}>{e}</span>
+                ))}
+                {['.txt','.md','.docx','.pdf'].map(e => (
+                  <span key={e} style={{ fontSize: '0.7rem', padding: '0.1rem 0.4rem', background: 'rgba(245,158,11,0.1)', color: 'var(--amber)', borderRadius: '4px' }}>{e}</span>
+                ))}
               </div>
-              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.375rem' }}>
-                💡 iPhone AirDrop → 파일 앱 → 공유 → Safari에서 파일 선택
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                🎵 오디오: Groq Whisper 전사 (최대 25MB) · ⚠️ GROQ_API_KEY 필요
+              </div>
+              <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                📱 iPhone AirDrop → 파일 앱 → 공유 → Safari에서 선택 &nbsp;|&nbsp; 🤖 갤럭시: 녹음 앱 → 공유
               </div>
             </>
           )}
           <input
             ref={fileInputRef}
             type="file"
-            accept=".txt,.md,.docx,.pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/markdown"
+            accept=".txt,.md,.docx,.pdf,.m4a,.mp3,.mp4,.wav,.ogg,.flac,.webm,.aac,.caf,audio/*,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/pdf,text/plain,text/markdown"
             style={{ display: 'none' }}
             onChange={e => { const f = e.target.files?.[0]; if (f) extractFile(f); e.target.value = '' }}
           />
