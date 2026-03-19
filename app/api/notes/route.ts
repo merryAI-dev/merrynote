@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAdminDb } from '@/lib/firebase-admin'
 import { FieldValue } from 'firebase-admin/firestore'
 import { generateEmbedding } from '@/lib/gemini'
+import { extractStructured } from '@/lib/claude'
 
 export async function GET() {
   try {
@@ -24,7 +25,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { title, content, transcript, audio_url, word_count, duration_min } = body
+    const { title, content, transcript, audio_url, word_count, duration_min, speaker_map, speaker_segments } = body
 
     if (!title || !content) {
       return NextResponse.json({ error: 'title과 content는 필수입니다.' }, { status: 400 })
@@ -32,13 +33,22 @@ export async function POST(req: NextRequest) {
 
     const db = getAdminDb()
 
-    // 임베딩 생성 (GEMINI_API_KEY 없으면 스킵)
+    // 임베딩 생성 + 구조화 추출 병렬 실행
     let embedding: number[] | null = null
-    if (process.env.GEMINI_API_KEY) {
-      try {
-        embedding = await generateEmbedding(`${title}\n\n${content}`)
-      } catch { /* 임베딩 실패해도 노트 저장은 성공 */ }
-    }
+    let structured = null
+
+    await Promise.all([
+      process.env.GEMINI_API_KEY
+        ? generateEmbedding(`${title}\n\n${content}`)
+            .then(e => { embedding = e })
+            .catch(() => {})
+        : Promise.resolve(),
+      process.env.ANTHROPIC_API_KEY
+        ? extractStructured(content)
+            .then(s => { structured = s })
+            .catch(() => {})
+        : Promise.resolve(),
+    ])
 
     const ref = await db.collection('notes').add({
       title,
@@ -48,6 +58,9 @@ export async function POST(req: NextRequest) {
       wordCount: word_count ?? null,
       durationMin: duration_min ?? null,
       embedding: embedding ?? null,  // 768차원 벡터 또는 null
+      structured: structured ?? null,
+      speakerMap: speaker_map ?? null,
+      speakerSegments: speaker_segments ?? null,
       createdAt: FieldValue.serverTimestamp(),
     })
 

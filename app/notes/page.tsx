@@ -7,7 +7,10 @@ type Note = {
   id: string
   title: string
   word_count: number | null
+  wordCount?: number | null
   created_at: string
+  createdAt?: string
+  structured?: { decisions: string[]; actions: { owner: string; task: string }[]; agenda: string[] } | null
 }
 
 export default function NotesPage() {
@@ -167,7 +170,19 @@ export default function NotesPage() {
                     {"word_count" in note && note.word_count ? ` · ${note.word_count.toLocaleString()} 단어` : ""}
                   </div>
                 </div>
-                <div style={{ color: 'var(--text-muted)', fontSize: '0.75rem', marginLeft: '1rem', flexShrink: 0 }}>→</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginLeft: '1rem', flexShrink: 0 }}>
+                  {'structured' in note && (note as Note).structured?.actions?.length ? (
+                    <span style={{
+                      fontSize: '0.7rem', fontWeight: 700,
+                      background: 'rgba(245,158,11,0.15)', color: 'var(--amber)',
+                      border: '1px solid rgba(245,158,11,0.3)',
+                      borderRadius: '10px', padding: '0.1rem 0.45rem',
+                    }}>
+                      ✓ {(note as Note).structured!.actions.length}
+                    </span>
+                  ) : null}
+                  <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>→</span>
+                </div>
               </div>
             </Link>
           ))}

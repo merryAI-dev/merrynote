@@ -13,7 +13,7 @@ export const maxDuration = 300  // Vercel Pro: 최대 300초
 
 export async function POST(req: NextRequest) {
   try {
-    const { transcript, title: rawTitle, durationMin = 0 } = await req.json()
+    const { transcript, title: rawTitle, durationMin = 0, speakerMappings = [] } = await req.json()
 
     if (!transcript || transcript.trim().length < 10) {
       return new Response(
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
           if (chunked) {
             // ── 청크 분할 모드 (긴 전사본) ──────────────────────────────
             let fullContent = ''
-            for await (const ev of streamChunkedMeetingNotes(title, transcript, durationMin, vocab)) {
+            for await (const ev of streamChunkedMeetingNotes(title, transcript, durationMin, vocab, speakerMappings)) {
               if (ev.type === 'progress') {
                 send({ type: 'progress', text: ev.text })
               } else {
@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
           } else {
             // ── 단일 스트리밍 (짧은 전사본) ─────────────────────────────
             let fullContent = ''
-            for await (const text of streamMeetingNotes(title, transcript, durationMin, vocab)) {
+            for await (const text of streamMeetingNotes(title, transcript, durationMin, vocab, speakerMappings)) {
               fullContent += text
               send({ type: 'delta', text })
             }

@@ -4,7 +4,15 @@ import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 
-type Note = { title: string; content: string; created_at: string; word_count: number | null; duration_min: number | null }
+type Structured = { decisions: string[]; actions: { owner: string; task: string }[]; agenda: string[] }
+type Note = {
+  title: string; content: string
+  created_at: string; createdAt?: string
+  word_count: number | null; wordCount?: number | null
+  duration_min: number | null; durationMin?: number | null
+  audioUrl?: string | null
+  structured?: Structured | null
+}
 
 export default function NoteDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -14,6 +22,10 @@ export default function NoteDetailPage() {
   const [error, setError] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [html, setHtml] = useState('')
+
+  const [copied, setCopied] = useState(false)
+  const [slackSharing, setSlackSharing] = useState(false)
+  const [slackDone, setSlackDone] = useState(false)
 
   // 편집 모드
   const [editing, setEditing] = useState(false)
@@ -51,6 +63,39 @@ export default function NoteDetailPage() {
     const a = document.createElement('a')
     a.href = url; a.download = `${note.title}.md`; a.click()
     URL.revokeObjectURL(url)
+  }
+
+  const handleSlack = async () => {
+    if (!note) return
+    const channel = prompt('공유할 채널명을 입력하세요 (예: general)')
+    if (!channel) return
+    setSlackSharing(true)
+    try {
+      const res = await fetch('/api/slack', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          channel,
+          title: note.title,
+          summary: note.structured?.decisions?.slice(0, 2).join(' / ') ?? '',
+          url: window.location.href,
+        }),
+      })
+      if (!res.ok) throw new Error()
+      setSlackDone(true)
+      setTimeout(() => setSlackDone(false), 3000)
+    } catch {
+      alert('Slack 전송에 실패했어요.')
+    } finally {
+      setSlackSharing(false)
+    }
+  }
+
+  const handleCopy = async () => {
+    if (!note) return
+    await navigator.clipboard.writeText(note.content)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
   }
 
   const startEdit = () => {
@@ -120,9 +165,9 @@ export default function NoteDetailPage() {
             ← 목록
           </button>
           <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-            {formatDate(note.created_at)}
-            {note.word_count ? ` · ${note.word_count.toLocaleString()} 단어` : ''}
-            {note.duration_min ? ` · ${note.duration_min}분` : ''}
+            {formatDate(note.created_at ?? note.createdAt ?? '')}
+            {(note.word_count ?? note.wordCount) ? ` · ${(note.word_count ?? note.wordCount)!.toLocaleString()} 단어` : ''}
+            {(note.duration_min ?? note.durationMin) ? ` · ${note.duration_min ?? note.durationMin}분` : ''}
           </div>
         </div>
         <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -135,12 +180,33 @@ export default function NoteDetailPage() {
               ✏️ 수정
             </button>
           )}
+          <button onClick={handleSlack} disabled={slackSharing} style={{
+            padding: '0.375rem 0.875rem', background: 'var(--bg-card)',
+            border: '1px solid var(--border)', borderRadius: '5px',
+            color: slackDone ? 'var(--teal)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem',
+          }}>
+            {slackDone ? '✓ 전송됨' : slackSharing ? '...' : 'Slack'}
+          </button>
+          <button onClick={handleCopy} style={{
+            padding: '0.375rem 0.875rem', background: 'var(--bg-card)',
+            border: '1px solid var(--border)', borderRadius: '5px',
+            color: copied ? 'var(--teal)' : 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem',
+          }}>
+            {copied ? '✓ 복사됨' : '복사'}
+          </button>
           <button onClick={handleDownload} style={{
             padding: '0.375rem 0.875rem', background: 'var(--bg-card)',
             border: '1px solid var(--border)', borderRadius: '5px',
             color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem',
           }}>
-            ↓ 다운로드
+            ↓ MD
+          </button>
+          <button onClick={() => window.print()} style={{
+            padding: '0.375rem 0.875rem', background: 'var(--bg-card)',
+            border: '1px solid var(--border)', borderRadius: '5px',
+            color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem',
+          }}>
+            🖨️ 인쇄
           </button>
           <button onClick={handleDelete} disabled={deleting} style={{
             padding: '0.375rem 0.875rem', background: 'rgba(239,68,68,0.1)',
@@ -199,6 +265,46 @@ export default function NoteDetailPage() {
           <h1 style={{ fontSize: '1.4rem', fontWeight: 700, marginBottom: '1.5rem', lineHeight: '1.4' }}>
             {note.title}
           </h1>
+
+          {/* 오디오 플레이어 (Phase 5) */}
+          {note.audioUrl && (
+            <div style={{ marginBottom: '1.5rem' }}>
+              <audio controls src={note.audioUrl} style={{ width: '100%', borderRadius: '6px' }} />
+            </div>
+          )}
+
+          {/* 구조화 카드 (Phase 4) */}
+          {note.structured && (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem', marginBottom: '1.75rem' }}>
+              {note.structured.agenda?.length > 0 && (
+                <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>논의 주제</div>
+                  <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.82rem', lineHeight: '1.7' }}>
+                    {note.structured.agenda.map((a, i) => <li key={i}>{a}</li>)}
+                  </ul>
+                </div>
+              )}
+              {note.structured.decisions?.length > 0 && (
+                <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--teal)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>결정 사항</div>
+                  <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.82rem', lineHeight: '1.7' }}>
+                    {note.structured.decisions.map((d, i) => <li key={i}>{d}</li>)}
+                  </ul>
+                </div>
+              )}
+              {note.structured.actions?.length > 0 && (
+                <div style={{ background: 'var(--bg-card)', border: '1px solid rgba(245,158,11,0.3)', borderRadius: '8px', padding: '1rem' }}>
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--amber)', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: '0.6rem' }}>액션 아이템</div>
+                  <ul style={{ margin: 0, paddingLeft: '1rem', fontSize: '0.82rem', lineHeight: '1.7' }}>
+                    {note.structured.actions.map((a, i) => (
+                      <li key={i}><strong>{a.owner}</strong>: {a.task}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="prose-note" style={{ lineHeight: '1.7' }} dangerouslySetInnerHTML={{ __html: html }} />
         </>
       )}

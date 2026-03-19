@@ -2,12 +2,14 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import { upload } from '@vercel/blob/client'
 
 
 // ─── Types ──────────────────────────────────────────────────────────────────
-type WizardStep = 1 | 2 | 3
+type WizardStep = 1 | 2 | 3 | 4
 type InputMethod = 'mic' | 'file' | 'text'
 type Correction = { from: string; to: string }
+type SpeakerMapping = { quote: string; speaker: string }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function findCorrections(original: string, edited: string): Correction[] {
@@ -30,17 +32,42 @@ function formatTime(s: number) {
   return `${Math.floor(s / 60).toString().padStart(2, '0')}:${(s % 60).toString().padStart(2, '0')}`
 }
 
+// 전사 결과에서 [MM:SS Speaker N] 패턴 파싱
+type Segment = { start: number; end: number; speaker: string; text: string }
+function parseSegments(text: string): Segment[] {
+  const pat = /^\[(\d{1,2}):(\d{2})\s+(Speaker\s*\d+|화자\s*\d+)\]\s*(.+)/i
+  const segs: Segment[] = []
+  for (const line of text.split('\n')) {
+    const m = line.trim().match(pat)
+    if (m) segs.push({ start: +m[1]*60 + +m[2], end: 0, speaker: m[3].replace(/\s+/g,' ').trim(), text: m[4].trim() })
+  }
+  for (let i = 0; i < segs.length; i++) segs[i].end = i < segs.length-1 ? segs[i+1].start : segs[i].start+30
+  return segs
+}
+
+// 트랜스크립트에서 대표 발언 샘플 추출
+function extractSampleQuotes(transcript: string, n = 6): string[] {
+  const sentences = transcript
+    .split(/\n+|(?<=[.!?。])\s+/)
+    .map(s => s.trim())
+    .filter(s => s.length > 15 && s.length < 180)
+  if (sentences.length === 0) return []
+  if (sentences.length <= n) return sentences
+  const step = Math.floor(sentences.length / n)
+  return Array.from({ length: n }, (_, i) => sentences[Math.min(i * step, sentences.length - 1)])
+}
+
 // ─── Step Indicator ───────────────────────────────────────────────────────────
 function StepBar({ step }: { step: WizardStep }) {
-  const steps = ['입력', '생성', '검수']
+  const steps = ['입력', '참석자', '생성', '검수']
   return (
     <div style={{ display: 'flex', alignItems: 'center', marginBottom: '2rem' }}>
       {steps.map((label, i) => {
-        const n = i + 1
+        const n = (i + 1) as WizardStep
         const active = n === step
         const done = n < step
         return (
-          <div key={n} style={{ display: 'flex', alignItems: 'center', flex: i < 2 ? 1 : 'none' }}>
+          <div key={n} style={{ display: 'flex', alignItems: 'center', flex: i < 3 ? 1 : 'none' }}>
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.3rem' }}>
               <div style={{
                 width: '30px', height: '30px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -55,7 +82,7 @@ function StepBar({ step }: { step: WizardStep }) {
                 {label}
               </span>
             </div>
-            {i < 2 && (
+            {i < 3 && (
               <div style={{
                 flex: 1, height: '2px', margin: '0 0.5rem', marginBottom: '1.2rem',
                 background: done ? 'var(--teal)' : 'var(--border)', transition: 'background 0.3s',
@@ -116,16 +143,33 @@ export default function UploadPage() {
   const [corrections, setCorrections] = useState<Correction[]>([])
   const [wordCount, setWordCount] = useState(0)
 
+  // 이전 회의 화자 이름 제안
+  const [suggestedNames, setSuggestedNames] = useState<string[]>([])
+
   // Error
   const [error, setError] = useState('')
+
+  // 라이브 트랜스크립트 라인 (녹음 중 실시간 표시용)
+  const [liveLines, setLiveLines] = useState<string[]>([])
+
+  // MediaRecorder — Gemini 재전사 (Phase 3)
+  const [showRetranscribeChoice, setShowRetranscribeChoice] = useState(false)
+  const [retranscribing, setRetranscribing] = useState(false)
+
+  // 발화자 매핑 (Step 2)
+  const [speakerMappings, setSpeakerMappings] = useState<SpeakerMapping[]>([])
 
   // Refs
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const fullTextRef = useRef('')
+  const liveLinesRef = useRef<string[]>([])
   const streamBoxRef = useRef<HTMLDivElement>(null)
+  const liveBoxRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordedChunksRef = useRef<Blob[]>([])
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const getSR = () => (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
@@ -134,14 +178,38 @@ export default function UploadPage() {
     if (!getSR()) setMicSupported(false)
   }, [])
 
+  // Step 2 진입 시 이전 회의 화자 이름 로드
+  useEffect(() => {
+    if (step === 2 && suggestedNames.length === 0) {
+      fetch('/api/notes').then(r => r.json()).then((notes: { speakerMap?: Record<string, string> }[]) => {
+        const names = new Map<string, number>()
+        for (const n of notes.slice(0, 10)) {
+          if (n.speakerMap) {
+            for (const name of Object.values(n.speakerMap)) {
+              names.set(name, (names.get(name) ?? 0) + 1)
+            }
+          }
+        }
+        const sorted = [...names.entries()].sort((a, b) => b[1] - a[1]).map(e => e[0])
+        if (sorted.length > 0) setSuggestedNames(sorted)
+      }).catch(() => {})
+    }
+  }, [step, suggestedNames.length])
+
   useEffect(() => {
     if (isStreaming && streamBoxRef.current) {
       streamBoxRef.current.scrollTop = streamBoxRef.current.scrollHeight
     }
   }, [streamedContent, isStreaming])
 
+  useEffect(() => {
+    if (liveBoxRef.current) {
+      liveBoxRef.current.scrollTop = liveBoxRef.current.scrollHeight
+    }
+  }, [liveLines, interimText])
+
   // ─── Recording ──────────────────────────────────────────────────────────────
-  const startRecording = () => {
+  const startRecording = async () => {
     const SR = getSR()
     if (!SR) return
     const rec = new SR()
@@ -149,12 +217,29 @@ export default function UploadPage() {
     rec.continuous = true
     rec.interimResults = true
     fullTextRef.current = ''
+    liveLinesRef.current = []
+    recordedChunksRef.current = []
+    setLiveLines([])
+    setShowRetranscribeChoice(false)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     rec.onresult = (e: any) => {
       let interim = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript
-        e.results[i].isFinal ? (fullTextRef.current += t + ' ') : (interim += t)
+        if (e.results[i].isFinal) {
+          fullTextRef.current += t + ' '
+          // 마침표·물음표·느낌표 기준으로 라인 분리, 없으면 그냥 추가
+          const sentences = t.trim().match(/[^.!?。]+[.!?。]*/g) ?? [t.trim()]
+          sentences.forEach((s: string) => {
+            const line = s.trim()
+            if (line) {
+              liveLinesRef.current = [...liveLinesRef.current, line]
+              setLiveLines([...liveLinesRef.current])
+            }
+          })
+        } else {
+          interim += t
+        }
       }
       setTranscript(fullTextRef.current)
       setInterimText(interim)
@@ -169,6 +254,17 @@ export default function UploadPage() {
     setIsRecording(true)
     setRecTime(0)
     timerRef.current = setInterval(() => setRecTime(t => t + 1), 1000)
+
+    // MediaRecorder로 오디오도 동시에 녹음 (Gemini 재전사용)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'
+      const mr = new MediaRecorder(stream, { mimeType })
+      mr.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data) }
+      mr.onstop = () => stream.getTracks().forEach(t => t.stop())
+      mr.start(1000)
+      mediaRecorderRef.current = mr
+    } catch { /* MediaRecorder 실패해도 Web Speech는 계속 동작 */ }
   }
 
   const stopRecording = useCallback(() => {
@@ -178,9 +274,53 @@ export default function UploadPage() {
       recognitionRef.current = null
     }
     if (timerRef.current) clearInterval(timerRef.current)
+    if (mediaRecorderRef.current?.state !== 'inactive') {
+      mediaRecorderRef.current?.stop()
+    }
+    mediaRecorderRef.current = null
     setIsRecording(false)
     setInterimText('')
+    // 녹음된 오디오가 있으면 재전사 선택 UI 표시
+    setTimeout(() => {
+      if (recordedChunksRef.current.length > 0 && fullTextRef.current.trim()) {
+        setShowRetranscribeChoice(true)
+      }
+    }, 500)
   }, [])
+
+  const retranscribeWithGemini = async () => {
+    if (!recordedChunksRef.current.length) return
+    setRetranscribing(true)
+    setShowRetranscribeChoice(false)
+    setError('')
+    try {
+      const mimeType = recordedChunksRef.current[0].type || 'audio/webm'
+      const blob = new Blob(recordedChunksRef.current, { type: mimeType })
+      const ext = mimeType.includes('ogg') ? 'ogg' : 'webm'
+      const file = new File([blob], `live-${Date.now()}.${ext}`, { type: mimeType })
+      const sizeMB = file.size / (1024 * 1024)
+      let text: string
+      if (sizeMB > 4.3) {
+        const blobResult = await upload(`${Date.now()}-${file.name}`, file, { access: 'public', handleUploadUrl: '/api/blob-upload' })
+        const res = await fetch('/api/transcribe-audio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: blobResult.url, filename: file.name }) })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || '재전사 실패')
+        text = data.text
+      } else {
+        const fd = new FormData(); fd.append('file', file)
+        const res = await fetch('/api/transcribe-audio', { method: 'POST', body: fd })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || '재전사 실패')
+        text = data.text
+      }
+      fullTextRef.current = text
+      setTranscript(text)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Gemini 재전사 실패')
+    } finally {
+      setRetranscribing(false)
+    }
+  }
 
   // ─── File extraction ─────────────────────────────────────────────────────────
   const AUDIO_EXTS = ['m4a', 'mp3', 'mp4', 'wav', 'ogg', 'flac', 'webm', 'aac', 'mpeg', 'caf']
@@ -225,29 +365,56 @@ export default function UploadPage() {
     // ── 오디오 파일: /api/transcribe-audio (Gemini) ──
     if (AUDIO_EXTS.includes(ext)) {
       const sizeMB = file.size / (1024 * 1024)
-      if (sizeMB > 4.3) {
-        setError(
-          `파일이 ${sizeMB.toFixed(1)}MB로 업로드 한도(4.3MB)를 초과해요.\n` +
-          `짧은 클립이나 브라우저 녹음 탭을 사용해주세요 🎙️`
-        )
-        return
-      }
+      const useBlobUpload = sizeMB > 4.3  // 4.3MB 초과 시 Vercel Blob 직접 업로드
+
       setIsExtracting(true)
-      setExtractedFileName(`🎵 ${file.name} (${sizeMB.toFixed(1)}MB) 전사 중...`)
+      setExtractedFileName(`🎵 ${file.name} (${sizeMB.toFixed(1)}MB) ${useBlobUpload ? '대용량 업로드 중...' : '전사 중...'}`)
       try {
-        const fd = new FormData()
-        fd.append('file', file)
-        const res = await fetch('/api/transcribe-audio', { method: 'POST', body: fd })
-        if (!res.ok) {
-          const text = await res.text().catch(() => '')
-          let msg = text
-          try { msg = JSON.parse(text).error ?? text } catch {}
-          throw new Error(msg || `서버 오류 (${res.status})`)
+        let audioUrl: string | null = null
+
+        if (useBlobUpload) {
+          // ── 대용량: 브라우저 → Vercel Blob 직접 업로드 ──
+          setExtractedFileName(`☁️ ${file.name} (${sizeMB.toFixed(1)}MB) Blob에 업로드 중...`)
+          const uniqueName = `${Date.now()}-${file.name}`
+          const blob = await upload(uniqueName, file, {
+            access: 'public',
+            handleUploadUrl: '/api/blob-upload',
+          })
+          audioUrl = blob.url
+          setExtractedFileName(`🔄 ${file.name} 전사 중... (Gemini AI)`)
+
+          // Blob URL을 API에 전달해서 전사
+          const res = await fetch('/api/transcribe-audio', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url: audioUrl, filename: file.name }),
+          })
+          if (!res.ok) {
+            const text = await res.text().catch(() => '')
+            let msg = text
+            try { msg = JSON.parse(text).error ?? text } catch {}
+            throw new Error(msg || `서버 오류 (${res.status})`)
+          }
+          const data = await res.json()
+          fullTextRef.current = data.text
+          setTranscript(data.text)
+          setExtractedFileName(`✅ ${file.name} (${data.sizeMB}MB 전사 완료)`)
+        } else {
+          // ── 소용량: FormData 직접 업로드 ──
+          const fd = new FormData()
+          fd.append('file', file)
+          const res = await fetch('/api/transcribe-audio', { method: 'POST', body: fd })
+          if (!res.ok) {
+            const text = await res.text().catch(() => '')
+            let msg = text
+            try { msg = JSON.parse(text).error ?? text } catch {}
+            throw new Error(msg || `서버 오류 (${res.status})`)
+          }
+          const data = await res.json()
+          fullTextRef.current = data.text
+          setTranscript(data.text)
+          setExtractedFileName(`✅ ${file.name} (${data.sizeMB}MB 전사 완료)`)
         }
-        const data = await res.json()
-        fullTextRef.current = data.text
-        setTranscript(data.text)
-        setExtractedFileName(`✅ ${file.name} (${data.sizeMB}MB 전사 완료)`)
       } catch (e) {
         setError(e instanceof Error ? e.message : '오디오 전사 실패')
         setExtractedFileName('')
@@ -261,21 +428,25 @@ export default function UploadPage() {
   }
 
   // ─── Generate (streaming) ─────────────────────────────────────────────────────
-  const generate = async () => {
+  const generate = async (mappings: SpeakerMapping[] = speakerMappings) => {
     if (!transcript.trim()) return
     setError('')
     setStreamedContent('')
     setStreamedTitle('')
     setProgressMsg('')
     setIsChunked(false)
-    setStep(2)
+    setStep(3)
     setIsStreaming(true)
 
     try {
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ transcript, title: title.trim() || undefined }),
+        body: JSON.stringify({
+          transcript,
+          title: title.trim() || undefined,
+          speakerMappings: mappings.filter(m => m.speaker.trim()),
+        }),
       })
       if (!res.ok || !res.body) {
         const text = await res.text().catch(() => '')
@@ -325,7 +496,7 @@ export default function UploadPage() {
       setEditedTitle(finalTitle)
       setWordCount(finalWordCount)
       setIsStreaming(false)
-      setStep(3)
+      setStep(4)
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '생성 오류')
       setIsStreaming(false)
@@ -369,6 +540,15 @@ export default function UploadPage() {
         })
       }
 
+      // 화자 세그먼트 파싱 + 매핑 구축
+      const segments = parseSegments(transcript)
+      const sMap: Record<string, string> = {}
+      for (const m of speakerMappings) {
+        if (!m.speaker.trim()) continue
+        const seg = segments.find(s => s.text.includes(m.quote.slice(0, 30)))
+        if (seg && !sMap[seg.speaker]) sMap[seg.speaker] = m.speaker.trim()
+      }
+
       // 회의록 저장 → Firestore
       const saveRes = await fetch('/api/notes', {
         method: 'POST',
@@ -378,6 +558,8 @@ export default function UploadPage() {
           content: editedContent,
           transcript,
           word_count: editedContent.split(/\s+/).filter(Boolean).length,
+          speaker_map: Object.keys(sMap).length > 0 ? sMap : null,
+          speaker_segments: segments.length > 0 ? segments : null,
         }),
       })
       if (!saveRes.ok) {
@@ -402,8 +584,8 @@ export default function UploadPage() {
     setInterimText(''); setIsRecording(false); setRecTime(0)
     setStreamedContent(''); setStreamedTitle(''); setEditedContent(''); setEditedTitle('')
     setDoneId(''); setCorrections([]); setWordCount(0); setError(''); setPendingCorrections([])
-    setExtractedFileName(''); setIsExtracting(false)
-    fullTextRef.current = ''
+    setExtractedFileName(''); setIsExtracting(false); setLiveLines([]); setSpeakerMappings([])
+    fullTextRef.current = ''; liveLinesRef.current = []
   }
 
   // ════════════════════════════════════════════════════════════════════════════
@@ -467,9 +649,103 @@ export default function UploadPage() {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // RENDER: Step 2 — Streaming
+  // RENDER: Step 2 — 발화자 매핑
   // ════════════════════════════════════════════════════════════════════════════
   if (step === 2) {
+    const quotes = extractSampleQuotes(transcript)
+    // 처음 진입 시 speakerMappings 초기화
+    if (speakerMappings.length === 0 && quotes.length > 0) {
+      setSpeakerMappings(quotes.map(q => ({ quote: q, speaker: '' })))
+    }
+    const knownNames = Array.from(new Set([
+      ...suggestedNames,
+      ...speakerMappings.map(m => m.speaker).filter(Boolean),
+    ]))
+
+    return (
+      <div style={{ padding: '2rem', maxWidth: '680px' }}>
+        <StepBar step={2} />
+
+        <div style={{ marginBottom: '1.5rem' }}>
+          <h1 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--amber)', marginBottom: '0.25rem' }}>
+            참석자를 알아볼게요
+          </h1>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+            아래 발언들이 누구의 말인지 알려주시면 회의록에 이름이 정확하게 표기돼요.<br />
+            모르는 발언은 비워도 괜찮아요.
+          </p>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem', marginBottom: '1.5rem' }}>
+          {(speakerMappings.length > 0 ? speakerMappings : quotes.map(q => ({ quote: q, speaker: '' }))).map((item, i) => (
+            <div key={i} style={{
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: '10px', padding: '1rem 1.125rem',
+            }}>
+              {/* 발언 */}
+              <div style={{
+                fontSize: '0.875rem', lineHeight: '1.7', color: 'var(--text)',
+                marginBottom: '0.75rem',
+                borderLeft: '3px solid var(--amber)', paddingLeft: '0.75rem',
+              }}>
+                &ldquo;{item.quote}&rdquo;
+              </div>
+              {/* 이름 입력 */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>발화자</span>
+                <input
+                  type="text"
+                  value={item.speaker}
+                  onChange={e => setSpeakerMappings(prev =>
+                    prev.map((m, j) => j === i ? { ...m, speaker: e.target.value } : m)
+                  )}
+                  placeholder="이름 입력 (예: 보람, 에이블, 남지)"
+                  list={`names-${i}`}
+                  style={{
+                    flex: 1, padding: '0.4rem 0.75rem',
+                    background: 'var(--bg-hover)', border: '1px solid var(--border)',
+                    borderRadius: '6px', color: 'var(--text)', fontSize: '0.85rem', outline: 'none',
+                  }}
+                />
+                {knownNames.length > 0 && (
+                  <datalist id={`names-${i}`}>
+                    {knownNames.map(n => <option key={n} value={n} />)}
+                  </datalist>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ display: 'flex', gap: '0.625rem' }}>
+          <button onClick={() => setStep(1)} style={{
+            padding: '0.6rem 1.1rem', background: 'var(--bg-hover)', color: 'var(--text-muted)',
+            border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.875rem',
+          }}>
+            ← 뒤로
+          </button>
+          <button onClick={() => generate(speakerMappings)} style={{
+            flex: 1, padding: '0.6rem', background: 'var(--amber)', color: '#000',
+            border: 'none', borderRadius: '6px', fontWeight: 700, cursor: 'pointer', fontSize: '0.875rem',
+          }}>
+            📝 회의록 생성 →
+          </button>
+          <button onClick={() => generate([])} style={{
+            padding: '0.6rem 1rem', background: 'var(--bg-hover)', color: 'var(--text-muted)',
+            border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem',
+          }}>
+            건너뛰기
+          </button>
+        </div>
+        <style>{`@keyframes spin { to{transform:rotate(360deg)} }`}</style>
+      </div>
+    )
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // RENDER: Step 3 — Streaming
+  // ════════════════════════════════════════════════════════════════════════════
+  if (step === 3) {
     return (
       <div style={{ padding: '2rem', maxWidth: '760px' }}>
         <StepBar step={2} />
@@ -523,13 +799,13 @@ export default function UploadPage() {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // RENDER: Step 3 — Review
+  // RENDER: Step 4 — Review
   // ════════════════════════════════════════════════════════════════════════════
-  if (step === 3) {
+  if (step === 4) {
     const wc = editedContent.split(/\s+/).filter(Boolean).length
     return (
       <div style={{ display: 'flex', flexDirection: 'column', padding: '1.5rem 2rem', maxWidth: '760px', height: 'calc(100vh - 0px)' }}>
-        <StepBar step={3} />
+        <StepBar step={4} />
 
         {/* 헤더 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', marginBottom: '0.875rem' }}>
@@ -629,7 +905,7 @@ export default function UploadPage() {
             {wc.toLocaleString()} 단어
           </div>
           <div style={{ display: 'flex', gap: '0.625rem' }}>
-            <button onClick={() => { setStep(1); setIsStreaming(false) }} style={{
+            <button onClick={() => { setStep(2); setIsStreaming(false) }} style={{
               padding: '0.55rem 1.1rem', background: 'var(--bg-hover)', color: 'var(--text-muted)',
               border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem',
             }}>
@@ -699,39 +975,153 @@ export default function UploadPage() {
       </div>
 
       {/* ── 방식별 UI ── */}
-      {method === 'mic' && (
+      {method === 'mic' && !isRecording && (
         <div style={{
-          background: 'var(--bg-card)', border: `1px solid ${isRecording ? 'rgba(239,68,68,0.4)' : 'var(--border)'}`,
-          borderRadius: '10px', padding: '1.5rem', textAlign: 'center', marginBottom: '1rem', transition: 'border-color 0.2s',
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: '10px', padding: '1.5rem', textAlign: 'center', marginBottom: '1rem',
         }}>
-          {isRecording ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', marginBottom: '1rem' }}>
-                <span style={{ width: '10px', height: '10px', borderRadius: '50%', background: '#ef4444', animation: 'pulse 1s infinite', display: 'inline-block' }} />
-                <span style={{ fontWeight: 600, color: '#ef4444' }}>녹음 중</span>
-                <span style={{ fontSize: '0.875rem', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{formatTime(recTime)}</span>
-              </div>
+          <div style={{ fontSize: '2.25rem', marginBottom: '0.75rem' }}>🎙️</div>
+          <button onClick={startRecording} style={{
+            padding: '0.7rem 2rem', background: 'var(--amber)', color: '#000',
+            border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer',
+          }}>
+            ⏺ 녹음 시작
+          </button>
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
+            한국어 자동 인식 — 말하는 내용이 실시간으로 스트리밍돼요
+          </div>
+        </div>
+      )}
+
+      {/* ── 라이브 트랜스크립트 뷰 (녹음 중) ── */}
+      {method === 'mic' && isRecording && (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid rgba(239,68,68,0.35)',
+          borderRadius: '12px', overflow: 'hidden', marginBottom: '1rem',
+          boxShadow: '0 0 0 3px rgba(239,68,68,0.07)',
+        }}>
+          {/* 헤더 바 */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '0.75rem 1rem', borderBottom: '1px solid var(--border)',
+            background: 'rgba(239,68,68,0.05)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+              <span style={{
+                width: '8px', height: '8px', borderRadius: '50%',
+                background: '#ef4444', display: 'inline-block',
+                animation: 'pulse 1s infinite',
+              }} />
+              <span style={{ fontWeight: 700, fontSize: '0.85rem', color: '#ef4444' }}>LIVE</span>
+              <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                {formatTime(recTime)}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+              <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {(transcript + interimText).split(/\s+/).filter(Boolean).length} 단어
+              </span>
               <button onClick={stopRecording} style={{
-                padding: '0.7rem 2rem', background: '#ef4444', color: '#fff',
-                border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer',
+                padding: '0.4rem 1rem', background: '#ef4444', color: '#fff',
+                border: 'none', borderRadius: '6px', fontWeight: 700,
+                cursor: 'pointer', fontSize: '0.8rem',
               }}>
-                ⏹ 녹음 중지
+                ⏹ 중지
               </button>
-            </>
-          ) : (
-            <>
-              <div style={{ fontSize: '2.25rem', marginBottom: '0.75rem' }}>🎙️</div>
-              <button onClick={startRecording} style={{
-                padding: '0.7rem 2rem', background: 'var(--amber)', color: '#000',
-                border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer',
+            </div>
+          </div>
+
+          {/* 트랜스크립트 스트림 */}
+          <div
+            ref={liveBoxRef}
+            style={{
+              height: '320px', overflowY: 'auto',
+              padding: '1.25rem 1.5rem',
+              display: 'flex', flexDirection: 'column', gap: '0.5rem',
+            }}
+          >
+            {liveLines.length === 0 && !interimText && (
+              <div style={{
+                flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: 'var(--text-muted)', fontSize: '0.875rem', fontStyle: 'italic',
               }}>
-                ⏺ 녹음 시작
-              </button>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
-                한국어 자동 인식 — 말하는 내용이 아래 텍스트로 바로 표시돼요
+                말씀해주세요...
               </div>
-            </>
-          )}
+            )}
+            {liveLines.map((line, i) => (
+              <div key={i} style={{
+                fontSize: '0.95rem', lineHeight: '1.75', color: 'var(--text)',
+                padding: '0.375rem 0',
+                borderBottom: i < liveLines.length - 1 ? '1px solid rgba(255,255,255,0.04)' : 'none',
+                animation: 'fadeIn 0.3s ease',
+              }}>
+                {line}
+              </div>
+            ))}
+            {/* 인식 중인 텍스트 */}
+            {interimText && (
+              <div style={{
+                fontSize: '0.95rem', lineHeight: '1.75',
+                color: 'var(--text-muted)', fontStyle: 'italic',
+                padding: '0.375rem 0',
+              }}>
+                {interimText}
+                <span style={{
+                  display: 'inline-block', width: '2px', height: '1em',
+                  background: 'var(--amber)', marginLeft: '2px',
+                  animation: 'blink 0.8s infinite', verticalAlign: 'text-bottom',
+                }} />
+              </div>
+            )}
+            {!interimText && liveLines.length > 0 && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.375rem', paddingTop: '0.25rem' }}>
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--amber)', animation: 'pulse 1.2s infinite', display: 'inline-block' }} />
+                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>듣는 중...</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Gemini 재전사 선택 (녹음 완료 후) ── */}
+      {method === 'mic' && showRetranscribeChoice && !isRecording && (
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: '10px', padding: '1.25rem', marginBottom: '1rem',
+        }}>
+          <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.75rem' }}>
+            🎙️ 녹음이 완료됐어요. 어떤 전사본을 사용할까요?
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+            <button
+              onClick={() => setShowRetranscribeChoice(false)}
+              style={{
+                flex: 1, padding: '0.75rem', background: 'var(--bg-hover)',
+                border: '1px solid var(--border)', borderRadius: '8px',
+                cursor: 'pointer', textAlign: 'left',
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>Web Speech 결과 사용</div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>실시간 인식된 텍스트 · 즉시 진행</div>
+            </button>
+            <button
+              onClick={retranscribeWithGemini}
+              disabled={retranscribing}
+              style={{
+                flex: 1, padding: '0.75rem', background: 'rgba(245,158,11,0.08)',
+                border: '1px solid rgba(245,158,11,0.4)', borderRadius: '8px',
+                cursor: retranscribing ? 'not-allowed' : 'pointer', textAlign: 'left',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem', color: 'var(--amber)' }}>
+                {retranscribing && <Spinner />}
+                Gemini AI 재전사
+              </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                {retranscribing ? '전사 중...' : '녹음 오디오를 Gemini로 재전사 · 더 정확'}
+              </div>
+            </button>
+          </div>
         </div>
       )}
 
@@ -778,7 +1168,7 @@ export default function UploadPage() {
                 ))}
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)' }}>
-                🎵 오디오: Groq Whisper 전사 (최대 25MB) · ⚠️ GROQ_API_KEY 필요
+                🎵 오디오: Gemini AI 전사 · 4.3MB 이하 직접 · 초과 시 Blob 자동 업로드 (최대 100MB)
               </div>
               <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
                 📱 iPhone AirDrop → 파일 앱 → 공유 → Safari에서 선택 &nbsp;|&nbsp; 🤖 갤럭시: 녹음 앱 → 공유
@@ -873,9 +1263,9 @@ export default function UploadPage() {
         </div>
       )}
 
-      {/* ── 생성 버튼 ── */}
+      {/* ── 다음 버튼 (발화자 매핑으로 이동) ── */}
       <button
-        onClick={generate}
+        onClick={() => { setSpeakerMappings([]); setStep(2) }}
         disabled={!transcript.trim() || isExtracting || isRecording}
         style={{
           width: '100%', padding: '0.8rem',
@@ -886,12 +1276,14 @@ export default function UploadPage() {
           fontSize: '0.9rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
         }}
       >
-        {isExtracting ? <><Spinner color="#888" /> 파일 추출 중...</> : '📝 회의록 생성 →'}
+        {isExtracting ? <><Spinner color="#888" /> 파일 추출 중...</> : '다음 → 참석자 확인'}
       </button>
 
       <style>{`
         @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
         @keyframes spin { to{transform:rotate(360deg)} }
+        @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+        @keyframes fadeIn { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:translateY(0)} }
       `}</style>
     </div>
   )

@@ -28,7 +28,7 @@ export default function Sidebar() {
           <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--amber)' }}>MerryNote</span>
         </div>
         <div style={{ fontSize: '0.7rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-          MYSC 회의록 by Claude
+          MYSC 회의록
         </div>
       </div>
 
