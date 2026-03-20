@@ -156,6 +156,12 @@ export default function UploadPage() {
   const [showRetranscribeChoice, setShowRetranscribeChoice] = useState(false)
   const [retranscribing, setRetranscribing] = useState(false)
 
+  // 비동기 모드 (Kafka + Qwen)
+  const [asyncMode, setAsyncMode] = useState(false)
+  const [jobId, setJobId] = useState('')
+  const [jobStatus, setJobStatus] = useState('')
+  const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   // 발화자 매핑 (Step 2)
   const [speakerMappings, setSpeakerMappings] = useState<SpeakerMapping[]>([])
 
@@ -195,6 +201,11 @@ export default function UploadPage() {
       }).catch(() => {})
     }
   }, [step, suggestedNames.length])
+
+  // 폴링 cleanup
+  useEffect(() => {
+    return () => { if (jobPollRef.current) clearInterval(jobPollRef.current) }
+  }, [])
 
   useEffect(() => {
     if (isStreaming && streamBoxRef.current) {
@@ -504,6 +515,59 @@ export default function UploadPage() {
     }
   }
 
+  // ─── Generate Async (Kafka + Qwen) ──────────────────────────────────────────
+  const generateAsync = async (mappings: SpeakerMapping[] = speakerMappings) => {
+    if (!transcript.trim()) return
+    setError('')
+    setAsyncMode(true)
+    setJobStatus('queued')
+    setStep(3)
+
+    try {
+      const res = await fetch('/api/generate-async', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transcript,
+          title: title.trim() || undefined,
+          speakerMappings: mappings.filter(m => m.speaker.trim()),
+        }),
+      })
+      if (!res.ok) {
+        const text = await res.text().catch(() => '')
+        let msg = text
+        try { msg = JSON.parse(text).error ?? text } catch {}
+        throw new Error(msg || `비동기 생성 실패 (${res.status})`)
+      }
+
+      const { jobId: jid } = await res.json()
+      setJobId(jid)
+
+      // 폴링 시작
+      jobPollRef.current = setInterval(async () => {
+        try {
+          const jr = await fetch(`/api/jobs/${jid}`)
+          const job = await jr.json()
+          setJobStatus(job.status)
+
+          if (job.status === 'done' && job.noteId) {
+            if (jobPollRef.current) clearInterval(jobPollRef.current)
+            router.push(`/notes/${job.noteId}`)
+          } else if (job.status === 'error') {
+            if (jobPollRef.current) clearInterval(jobPollRef.current)
+            setError(job.error ?? '회의록 생성 실패')
+            setStep(1)
+            setAsyncMode(false)
+          }
+        } catch { /* 폴링 실패는 무시, 다음 시도 */ }
+      }, 3000)
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : '비동기 생성 오류')
+      setStep(1)
+      setAsyncMode(false)
+    }
+  }
+
   // ─── Approve ─────────────────────────────────────────────────────────────────
   // 1단계: 저장 버튼 클릭 → 교정 목록 계산 → 확인 패널 표시
   const requestApprove = () => {
@@ -730,6 +794,13 @@ export default function UploadPage() {
           }}>
             📝 회의록 생성 →
           </button>
+          <button onClick={() => generateAsync(speakerMappings)} style={{
+            padding: '0.6rem 1rem', background: 'rgba(124,58,237,0.15)',
+            border: '1px solid rgba(124,58,237,0.4)', borderRadius: '6px',
+            color: '#7C3AED', cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+          }}>
+            ⚡ Qwen 비동기
+          </button>
           <button onClick={() => generate([])} style={{
             padding: '0.6rem 1rem', background: 'var(--bg-hover)', color: 'var(--text-muted)',
             border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.8rem',
@@ -743,8 +814,64 @@ export default function UploadPage() {
   }
 
   // ════════════════════════════════════════════════════════════════════════════
-  // RENDER: Step 3 — Streaming
+  // RENDER: Step 3 — Streaming / Async
   // ════════════════════════════════════════════════════════════════════════════
+  if (step === 3 && asyncMode) {
+    const statusLabels: Record<string, { label: string; color: string; icon: string }> = {
+      queued: { label: '대기열에 추가됨', color: 'var(--text-muted)', icon: '📋' },
+      processing: { label: 'Qwen이 회의록 작성 중...', color: '#7C3AED', icon: '⚡' },
+      done: { label: '완료! 이동 중...', color: 'var(--teal)', icon: '✅' },
+      error: { label: '생성 실패', color: '#EF4444', icon: '❌' },
+    }
+    const st = statusLabels[jobStatus] ?? statusLabels.queued
+    return (
+      <div style={{ padding: '2rem', maxWidth: '680px' }}>
+        <StepBar step={3} />
+        <div style={{
+          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          borderRadius: '12px', padding: '3rem', textAlign: 'center',
+        }}>
+          <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>{st.icon}</div>
+          <div style={{ fontSize: '1.1rem', fontWeight: 700, color: st.color, marginBottom: '0.5rem' }}>
+            {st.label}
+          </div>
+          <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '1.5rem' }}>
+            Kafka → Qwen Worker 파이프라인으로 비동기 처리 중
+          </div>
+
+          {/* 프로그레스 바 */}
+          <div style={{ height: 6, background: '#333', borderRadius: 3, overflow: 'hidden', marginBottom: '1rem' }}>
+            <div style={{
+              height: '100%', borderRadius: 3,
+              background: jobStatus === 'processing' ? '#7C3AED' : jobStatus === 'done' ? 'var(--teal)' : 'var(--text-muted)',
+              width: jobStatus === 'queued' ? '15%' : jobStatus === 'processing' ? '60%' : '100%',
+              transition: 'width 0.5s ease',
+            }} />
+          </div>
+
+          <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            Job ID: {jobId.slice(0, 8)}... · 3초마다 상태 확인 중
+          </div>
+
+          {jobStatus !== 'done' && (
+            <button onClick={() => {
+              if (jobPollRef.current) clearInterval(jobPollRef.current)
+              setAsyncMode(false)
+              setStep(1)
+            }} style={{
+              marginTop: '1.5rem', padding: '0.5rem 1.25rem',
+              background: 'var(--bg-hover)', border: '1px solid var(--border)',
+              borderRadius: '6px', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.8rem',
+            }}>
+              취소
+            </button>
+          )}
+        </div>
+        <style>{`@keyframes spin { to{transform:rotate(360deg)} }`}</style>
+      </div>
+    )
+  }
+
   if (step === 3) {
     return (
       <div style={{ padding: '2rem', maxWidth: '760px' }}>
