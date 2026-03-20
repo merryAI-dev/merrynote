@@ -3,7 +3,11 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
+import dynamic from 'next/dynamic'
 
+const SpeakerWaveform = dynamic(() => import('@/components/SpeakerWaveform'), { ssr: false })
+
+type Segment = { start: number; end: number; speaker: string; text: string }
 type Structured = { decisions: string[]; actions: { owner: string; task: string }[]; agenda: string[] }
 type Note = {
   title: string; content: string
@@ -12,6 +16,8 @@ type Note = {
   duration_min: number | null; durationMin?: number | null
   audioUrl?: string | null
   structured?: Structured | null
+  speakerMap?: Record<string, string> | null
+  speakerSegments?: Segment[] | null
 }
 
 export default function NoteDetailPage() {
@@ -266,11 +272,15 @@ export default function NoteDetailPage() {
             {note.title}
           </h1>
 
-          {/* 오디오 플레이어 (Phase 5) */}
+          {/* 오디오 플레이어 + 화자별 파형 */}
           {note.audioUrl && (
-            <div style={{ marginBottom: '1.5rem' }}>
-              <audio controls src={note.audioUrl} style={{ width: '100%', borderRadius: '6px' }} />
-            </div>
+            <SpeakerWaveform
+              audioUrl={note.audioUrl}
+              segments={note.speakerSegments ?? undefined}
+              speakerMap={note.speakerMap ?? undefined}
+              noteId={id}
+              onSpeakerMapUpdate={(map) => setNote(prev => prev ? { ...prev, speakerMap: map } : prev)}
+            />
           )}
 
           {/* 구조화 카드 (Phase 4) */}

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAdminDb } from '@/lib/firebase-admin'
+import { FieldValue } from 'firebase-admin/firestore'
 import { generateEmbedding } from '@/lib/gemini'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -25,7 +26,38 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    const { title, content } = await req.json() as { title?: string; content?: string }
+    const body = await req.json() as {
+      title?: string; content?: string
+      speakerMap?: Record<string, string>
+    }
+
+    // 화자 매핑만 업데이트하는 경우
+    if (body.speakerMap && !body.title) {
+      const db = getAdminDb()
+      // 기존 speakerMap과 비교해서 corrections 기록
+      const doc = await db.collection('notes').doc(id).get()
+      const oldMap = (doc.data()?.speakerMap ?? {}) as Record<string, string>
+      const corrections: { from: string; to: string; speaker: string; correctedAt: string }[] = []
+      for (const [speaker, newName] of Object.entries(body.speakerMap)) {
+        const oldName = oldMap[speaker] ?? speaker
+        if (oldName !== newName && newName.trim()) {
+          corrections.push({ from: oldName, to: newName, speaker, correctedAt: new Date().toISOString() })
+        }
+      }
+
+      const updates: Record<string, unknown> = {
+        speakerMap: body.speakerMap,
+        updatedAt: new Date(),
+      }
+      if (corrections.length > 0) {
+        updates.speakerCorrections = FieldValue.arrayUnion(...corrections)
+      }
+      await db.collection('notes').doc(id).update(updates)
+      return NextResponse.json({ id, speakerMap: body.speakerMap, corrections: corrections.length })
+    }
+
+    // 일반 제목/본문 수정
+    const { title, content } = body
     if (!title?.trim()) return NextResponse.json({ error: '제목은 필수입니다.' }, { status: 400 })
 
     const db = getAdminDb()
