@@ -1,0 +1,15 @@
+{
+  "createdAt": "2026-03-20T06:34:47.769Z",
+  "speakers": {
+    "count": 82,
+    "file": "vocab/speakers.json"
+  },
+  "terms": {
+    "count": 411,
+    "file": "vocab/terms.json"
+  },
+  "corrections": {
+    "count": 0,
+    "file": "vocab/corrections.json"
+  }
+}

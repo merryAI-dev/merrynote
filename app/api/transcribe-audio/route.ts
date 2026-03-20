@@ -5,22 +5,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { transcribeAudio } from '@/lib/gemini'
 import { getAdminDb } from '@/lib/firebase-admin'
-
-// 단어장의 "from → to" 패턴으로 전사 텍스트 후처리
-function applyVocabCorrections(text: string, vocabContent: string): string {
-  let result = text
-  for (const line of vocabContent.split('\n')) {
-    const m = line.match(/^(.+?)\s*→\s*(.+)$/)
-    if (m) {
-      const from = m[1].trim()
-      const to = m[2].trim()
-      if (from && to && from !== to) {
-        result = result.replaceAll(from, to)
-      }
-    }
-  }
-  return result
-}
+import { applyVocabCorrections } from '@/lib/vocab'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
