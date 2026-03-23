@@ -4,6 +4,7 @@
 //   2. JSON { url, filename } — Vercel Blob URL (대용량 우회)
 import { NextRequest, NextResponse } from 'next/server'
 import { transcribeAudio } from '@/lib/gemini'
+import { transcribeWithWhisper } from '@/lib/whisper'
 import { getAdminDb } from '@/lib/firebase-admin'
 import { applyVocabCorrections } from '@/lib/vocab'
 
@@ -15,13 +16,6 @@ const SUPPORTED = ['m4a', 'mp3', 'mp4', 'wav', 'ogg', 'flac', 'webm', 'aac', 'ca
 
 export async function POST(req: NextRequest) {
   try {
-    if (!process.env.GEMINI_API_KEY) {
-      return NextResponse.json(
-        { error: 'GEMINI_API_KEY가 설정되지 않았습니다.' },
-        { status: 503 },
-      )
-    }
-
     const contentType = req.headers.get('content-type') ?? ''
     let buffer: Buffer
     let filename: string
@@ -87,6 +81,38 @@ export async function POST(req: NextRequest) {
       participantNames = [...nameSet]
     } catch { /* 단어장 로드 실패해도 계속 진행 */ }
 
+    // 엔진 선택: URL 파라미터 또는 JSON body의 engine 필드
+    const engine = req.nextUrl.searchParams.get('engine') ?? 'gemini'
+
+    if (engine === 'whisper') {
+      // ── Whisper + pyannote 화자분리 ───────────────────────────────────
+      if (!process.env.WHISPER_DIARIZE_URL) {
+        return NextResponse.json({ error: 'WHISPER_DIARIZE_URL이 설정되지 않았습니다.' }, { status: 503 })
+      }
+
+      const result = await transcribeWithWhisper(buffer, filename, participantNames)
+      if (!result.text) {
+        return NextResponse.json({ error: '오디오에서 음성을 인식하지 못했습니다.' }, { status: 422 })
+      }
+
+      let text = result.text
+      if (vocabContent.trim()) text = applyVocabCorrections(result.text, vocabContent)
+
+      return NextResponse.json({
+        text,
+        rawText: result.text,
+        name: filename,
+        sizeMB: parseFloat(sizeMB.toFixed(1)),
+        speakerSegments: result.speakerSegments,
+        engine: 'whisper',
+      })
+    }
+
+    // ── Gemini (기본) ────────────────────────────────────────────────────
+    if (!process.env.GEMINI_API_KEY) {
+      return NextResponse.json({ error: 'GEMINI_API_KEY가 설정되지 않았습니다.' }, { status: 503 })
+    }
+
     const rawText = await transcribeAudio(buffer, filename, participantNames)
     if (!rawText) {
       return NextResponse.json({ error: '오디오에서 음성을 인식하지 못했습니다.' }, { status: 422 })
@@ -96,7 +122,7 @@ export async function POST(req: NextRequest) {
     let text = rawText
     if (vocabContent.trim()) text = applyVocabCorrections(rawText, vocabContent)
 
-    return NextResponse.json({ text, rawText, name: filename, sizeMB: parseFloat(sizeMB.toFixed(1)) })
+    return NextResponse.json({ text, rawText, name: filename, sizeMB: parseFloat(sizeMB.toFixed(1)), engine: 'gemini' })
   } catch (err: unknown) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : '오디오 전사 오류' },

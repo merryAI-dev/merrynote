@@ -149,7 +149,17 @@ notes/{noteId}
   speakerMap: { "Speaker 1": "보람" }           // Phase 6
   speakerSegments: [{ start, end, speaker, text }]  // Phase 6
   speakerCorrections: [{ from, to, correctedAt }]   // Phase 7
+  // DPO 학습 데이터용
+  generatedContent: string                     // AI 최초 생성 원본
+  isEdited: boolean                            // 사용자 편집 여부
+  editDistance: number                         // 편집량 (문자수 차이)
+  qualityRating: "good" | "ok" | "poor" | null // 사용자 품질 평가
+  previousGenerations: string[]                // 재생성 이전 버전들
+  generationCount: number                      // 총 생성 횟수
+  contentRevisions: [{ content, editedAt }]    // 저장 후 편집 이력
+  editCount: number                            // 저장 후 편집 횟수
   createdAt: timestamp
+  updatedAt: timestamp
 
 vocab/glossary: { content, updatedAt }
 vocab/names: { content, updatedAt }

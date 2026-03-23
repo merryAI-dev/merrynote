@@ -35,6 +35,18 @@ services:
       KAFKA_CLUSTERS_0_NAME: merrynote-local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
 
+  # ── Whisper + pyannote 화자분리 서비스 ──────────────
+  whisper-diarize:
+    build: ./whisper-diarize
+    ports:
+      - "8000:8000"
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
+      DEVICE: ${DEVICE:-cpu}
+      COMPUTE_TYPE: ${COMPUTE_TYPE:-int8}
+    restart: unless-stopped
+
   # ── Worker (Kafka Consumer → Qwen → Firestore) ─────
   worker:
     build: ./worker

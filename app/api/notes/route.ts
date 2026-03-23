@@ -25,7 +25,11 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { title, content, transcript, audio_url, word_count, duration_min, speaker_map, speaker_segments } = body
+    const {
+      title, content, transcript, audio_url, word_count, duration_min,
+      speaker_map, speaker_segments,
+      generated_content, previous_generations,
+    } = body
 
     if (!title || !content) {
       return NextResponse.json({ error: 'title과 content는 필수입니다.' }, { status: 400 })
@@ -50,6 +54,11 @@ export async function POST(req: NextRequest) {
         : Promise.resolve(),
     ])
 
+    // DPO 데이터: AI 원본 vs 사용자 편집본 비교
+    const genContent = generated_content ?? content
+    const isEdited = generated_content ? generated_content !== content : false
+    const editDistance = generated_content ? Math.abs(generated_content.length - content.length) : 0
+
     const ref = await db.collection('notes').add({
       title,
       content,
@@ -57,10 +66,19 @@ export async function POST(req: NextRequest) {
       audioUrl: audio_url ?? null,
       wordCount: word_count ?? null,
       durationMin: duration_min ?? null,
-      embedding: embedding ?? null,  // 768차원 벡터 또는 null
+      embedding: embedding ?? null,
       structured: structured ?? null,
       speakerMap: speaker_map ?? null,
       speakerSegments: speaker_segments ?? null,
+      // DPO 학습 데이터용
+      generatedContent: genContent,
+      isEdited,
+      editDistance,
+      previousGenerations: previous_generations ?? [],
+      generationCount: (previous_generations?.length ?? 0) + 1,
+      qualityRating: null,
+      contentRevisions: [],
+      editCount: 0,
       createdAt: FieldValue.serverTimestamp(),
     })
 

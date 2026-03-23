@@ -106,6 +106,54 @@ function Spinner({ color = 'var(--amber)' }: { color?: string }) {
   )
 }
 
+// ─── Quality Rating (DPO 피드백) ─────────────────────────────────────────────
+function QualityRating({ noteId }: { noteId: string }) {
+  const [selected, setSelected] = useState<string | null>(null)
+
+  const rate = async (rating: 'good' | 'ok' | 'poor') => {
+    setSelected(rating)
+    try {
+      await fetch(`/api/notes/${noteId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ qualityRating: rating }),
+      })
+    } catch { /* 실패해도 UX 차단 안 함 */ }
+  }
+
+  if (selected) {
+    return (
+      <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+        피드백 감사합니다!
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ marginBottom: '1.25rem' }}>
+      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
+        AI 회의록 품질이 어땠나요?
+      </div>
+      <div style={{ display: 'flex', gap: '0.5rem', justifyContent: 'center' }}>
+        {([
+          ['good', '좋았어'],
+          ['ok', '보통'],
+          ['poor', '많이 고쳤어'],
+        ] as const).map(([value, label]) => (
+          <button key={value} onClick={() => rate(value)} style={{
+            padding: '0.35rem 0.85rem', background: 'var(--bg-card)',
+            border: '1px solid var(--border)', borderRadius: '16px',
+            color: 'var(--text-muted)', cursor: 'pointer', fontSize: '0.78rem',
+            transition: 'all 0.15s',
+          }}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 export default function UploadPage() {
   const router = useRouter()
@@ -158,12 +206,17 @@ export default function UploadPage() {
 
   // 비동기 모드 (Kafka + Qwen)
   const [asyncMode, setAsyncMode] = useState(false)
+  const [meetingRoomMode, setMeetingRoomMode] = useState(false)
+  const audioCtxRef = useRef<AudioContext | null>(null)
   const [jobId, setJobId] = useState('')
   const [jobStatus, setJobStatus] = useState('')
   const jobPollRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
   // 발화자 매핑 (Step 2)
   const [speakerMappings, setSpeakerMappings] = useState<SpeakerMapping[]>([])
+
+  // DPO: 재생성 이전 버전 보존
+  const [previousGenerations, setPreviousGenerations] = useState<string[]>([])
 
   // Refs
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -268,11 +321,32 @@ export default function UploadPage() {
 
     // MediaRecorder로 오디오도 동시에 녹음 (Gemini 재전사용)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const audioConstraints = meetingRoomMode
+        ? { echoCancellation: true, noiseSuppression: false, autoGainControl: false }
+        : true
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints })
       const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/ogg'
-      const mr = new MediaRecorder(stream, { mimeType })
+
+      // 회의실 모드: GainNode로 작은 소리 증폭 → Gemini가 먼 거리 음성도 인식
+      let recordStream = stream
+      if (meetingRoomMode) {
+        const audioCtx = new AudioContext()
+        audioCtxRef.current = audioCtx
+        const source = audioCtx.createMediaStreamSource(stream)
+        const gainNode = audioCtx.createGain()
+        gainNode.gain.value = 2.0
+        source.connect(gainNode)
+        const dest = audioCtx.createMediaStreamDestination()
+        gainNode.connect(dest)
+        recordStream = dest.stream
+      }
+
+      const mr = new MediaRecorder(recordStream, { mimeType })
       mr.ondataavailable = (e) => { if (e.data.size > 0) recordedChunksRef.current.push(e.data) }
-      mr.onstop = () => stream.getTracks().forEach(t => t.stop())
+      mr.onstop = () => {
+        stream.getTracks().forEach(t => t.stop())
+        if (audioCtxRef.current) { audioCtxRef.current.close(); audioCtxRef.current = null }
+      }
       mr.start(1000)
       mediaRecorderRef.current = mr
     } catch { /* MediaRecorder 실패해도 Web Speech는 계속 동작 */ }
@@ -328,6 +402,41 @@ export default function UploadPage() {
       setTranscript(text)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Gemini 재전사 실패')
+    } finally {
+      setRetranscribing(false)
+    }
+  }
+
+  // ─── Whisper + 화자분리 재전사 ──────────────────────────────────────────────
+  const retranscribeWithWhisper = async () => {
+    if (!recordedChunksRef.current.length) return
+    setRetranscribing(true)
+    setShowRetranscribeChoice(false)
+    setError('')
+    try {
+      const mimeType = recordedChunksRef.current[0].type || 'audio/webm'
+      const blob = new Blob(recordedChunksRef.current, { type: mimeType })
+      const ext = mimeType.includes('ogg') ? 'ogg' : 'webm'
+      const file = new File([blob], `live-${Date.now()}.${ext}`, { type: mimeType })
+      const sizeMB = file.size / (1024 * 1024)
+
+      let data: { text: string; speakerSegments?: { start: number; end: number; speaker: string; text: string }[] }
+      if (sizeMB > 4.3) {
+        const blobResult = await upload(`${Date.now()}-${file.name}`, file, { access: 'public', handleUploadUrl: '/api/blob-upload' })
+        const res = await fetch('/api/transcribe-audio?engine=whisper', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: blobResult.url, filename: file.name }) })
+        data = await res.json()
+        if (!res.ok) throw new Error((data as { error?: string }).error || 'Whisper 전사 실패')
+      } else {
+        const fd = new FormData(); fd.append('file', file)
+        const res = await fetch('/api/transcribe-audio?engine=whisper', { method: 'POST', body: fd })
+        data = await res.json()
+        if (!res.ok) throw new Error((data as { error?: string }).error || 'Whisper 전사 실패')
+      }
+
+      fullTextRef.current = data.text
+      setTranscript(data.text)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Whisper 전사 실패')
     } finally {
       setRetranscribing(false)
     }
@@ -624,6 +733,9 @@ export default function UploadPage() {
           word_count: editedContent.split(/\s+/).filter(Boolean).length,
           speaker_map: Object.keys(sMap).length > 0 ? sMap : null,
           speaker_segments: segments.length > 0 ? segments : null,
+          // DPO 학습 데이터: AI 원본 + 재생성 이전 버전
+          generated_content: streamedContent || editedContent,
+          previous_generations: previousGenerations.length > 0 ? previousGenerations : undefined,
         }),
       })
       if (!saveRes.ok) {
@@ -647,7 +759,7 @@ export default function UploadPage() {
     setStep(1); setMethod(null); setTitle(''); setTranscript('')
     setInterimText(''); setIsRecording(false); setRecTime(0)
     setStreamedContent(''); setStreamedTitle(''); setEditedContent(''); setEditedTitle('')
-    setDoneId(''); setCorrections([]); setWordCount(0); setError(''); setPendingCorrections([])
+    setDoneId(''); setCorrections([]); setWordCount(0); setError(''); setPendingCorrections([]); setPreviousGenerations([])
     setExtractedFileName(''); setIsExtracting(false); setLiveLines([]); setSpeakerMappings([])
     fullTextRef.current = ''; liveLinesRef.current = []
   }
@@ -686,6 +798,9 @@ export default function UploadPage() {
               ))}
             </div>
           )}
+
+          {/* DPO: 품질 평가 (선택사항) */}
+          <QualityRating noteId={doneId} />
 
           <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'center' }}>
             <button onClick={() => router.push(`/notes/${doneId}`)} style={{
@@ -1032,7 +1147,7 @@ export default function UploadPage() {
             {wc.toLocaleString()} 단어
           </div>
           <div style={{ display: 'flex', gap: '0.625rem' }}>
-            <button onClick={() => { setStep(2); setIsStreaming(false) }} style={{
+            <button onClick={() => { if (streamedContent) setPreviousGenerations(prev => [...prev, streamedContent]); setStep(2); setIsStreaming(false) }} style={{
               padding: '0.55rem 1.1rem', background: 'var(--bg-hover)', color: 'var(--text-muted)',
               border: '1px solid var(--border)', borderRadius: '6px', cursor: 'pointer', fontSize: '0.85rem',
             }}>
@@ -1108,6 +1223,27 @@ export default function UploadPage() {
           borderRadius: '10px', padding: '1.5rem', textAlign: 'center', marginBottom: '1rem',
         }}>
           <div style={{ fontSize: '2.25rem', marginBottom: '0.75rem' }}>🎙️</div>
+
+          {/* 회의실 모드 토글 */}
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '0', marginBottom: '1rem' }}>
+            {(['일반', '회의실'] as const).map((label, i) => {
+              const active = i === 0 ? !meetingRoomMode : meetingRoomMode
+              return (
+                <button key={label} onClick={() => setMeetingRoomMode(i === 1)} style={{
+                  padding: '0.4rem 1rem', fontSize: '0.78rem', fontWeight: active ? 700 : 400,
+                  background: active ? 'var(--amber)' : 'var(--bg-hover)',
+                  color: active ? '#000' : 'var(--text-muted)',
+                  border: '1px solid var(--border)',
+                  borderRadius: i === 0 ? '6px 0 0 6px' : '0 6px 6px 0',
+                  cursor: 'pointer', transition: 'all 0.15s',
+                  marginLeft: i === 1 ? '-1px' : '0',
+                }}>
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+
           <button onClick={startRecording} style={{
             padding: '0.7rem 2rem', background: 'var(--amber)', color: '#000',
             border: 'none', borderRadius: '8px', fontWeight: 700, cursor: 'pointer',
@@ -1115,7 +1251,9 @@ export default function UploadPage() {
             ⏺ 녹음 시작
           </button>
           <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.75rem' }}>
-            한국어 자동 인식 — 말하는 내용이 실시간으로 스트리밍돼요
+            {meetingRoomMode
+              ? '회의실 모드 — 먼 거리 음성도 잡아요 (Gemini 재전사 추천)'
+              : '한국어 자동 인식 — 말하는 내용이 실시간으로 스트리밍돼요'}
           </div>
         </div>
       )}
@@ -1213,40 +1351,74 @@ export default function UploadPage() {
       {/* ── Gemini 재전사 선택 (녹음 완료 후) ── */}
       {method === 'mic' && showRetranscribeChoice && !isRecording && (
         <div style={{
-          background: 'var(--bg-card)', border: '1px solid var(--border)',
+          background: meetingRoomMode ? 'rgba(245,158,11,0.06)' : 'var(--bg-card)',
+          border: `1px solid ${meetingRoomMode ? 'rgba(245,158,11,0.3)' : 'var(--border)'}`,
           borderRadius: '10px', padding: '1.25rem', marginBottom: '1rem',
         }}>
           <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.75rem' }}>
-            🎙️ 녹음이 완료됐어요. 어떤 전사본을 사용할까요?
+            {meetingRoomMode
+              ? '🎙️ 회의실 모드로 녹음했어요!'
+              : '🎙️ 녹음이 완료됐어요. 어떤 전사본을 사용할까요?'}
           </div>
-          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-            <button
-              onClick={() => setShowRetranscribeChoice(false)}
-              style={{
-                flex: 1, padding: '0.75rem', background: 'var(--bg-hover)',
-                border: '1px solid var(--border)', borderRadius: '8px',
-                cursor: 'pointer', textAlign: 'left',
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem' }}>Web Speech 결과 사용</div>
-              <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>실시간 인식된 텍스트 · 즉시 진행</div>
-            </button>
+          <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', flexDirection: meetingRoomMode ? 'column' : 'row' }}>
+            {/* 회의실 모드: Whisper 1순위, Gemini 2순위 / 일반 모드: Gemini만 */}
+            {meetingRoomMode && (
+              <button
+                onClick={retranscribeWithWhisper}
+                disabled={retranscribing}
+                style={{
+                  padding: '1rem', background: 'var(--amber)',
+                  border: '1px solid var(--amber)', borderRadius: '8px',
+                  cursor: retranscribing ? 'not-allowed' : 'pointer', textAlign: 'center',
+                }}
+              >
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem', color: '#000',
+                }}>
+                  {retranscribing && <Spinner color="#000" />}
+                  Whisper + 화자인식 (추천)
+                </div>
+                <div style={{ fontSize: '0.75rem', color: 'rgba(0,0,0,0.6)' }}>
+                  {retranscribing ? '전사 중...' : '한국어 전문 STT + 자동 화자분리'}
+                </div>
+              </button>
+            )}
             <button
               onClick={retranscribeWithGemini}
               disabled={retranscribing}
               style={{
-                flex: 1, padding: '0.75rem', background: 'rgba(245,158,11,0.08)',
-                border: '1px solid rgba(245,158,11,0.4)', borderRadius: '8px',
-                cursor: retranscribing ? 'not-allowed' : 'pointer', textAlign: 'left',
+                flex: meetingRoomMode ? undefined : 1, padding: '0.75rem',
+                background: meetingRoomMode ? 'var(--bg-card)' : 'rgba(245,158,11,0.08)',
+                border: `1px solid ${meetingRoomMode ? 'var(--border)' : 'rgba(245,158,11,0.4)'}`,
+                borderRadius: '8px',
+                cursor: retranscribing ? 'not-allowed' : 'pointer', textAlign: meetingRoomMode ? 'center' : 'left',
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem', color: 'var(--amber)' }}>
-                {retranscribing && <Spinner />}
+              <div style={{
+                display: 'flex', alignItems: 'center', justifyContent: meetingRoomMode ? 'center' : 'flex-start',
+                gap: '0.5rem', fontWeight: 700, fontSize: '0.85rem', marginBottom: '0.25rem',
+                color: meetingRoomMode ? 'var(--text-muted)' : 'var(--amber)',
+              }}>
+                {retranscribing && !meetingRoomMode && <Spinner />}
                 Gemini AI 재전사
               </div>
               <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                {retranscribing ? '전사 중...' : '녹음 오디오를 Gemini로 재전사 · 더 정확'}
+                {retranscribing && !meetingRoomMode ? '전사 중...' : '녹음 오디오를 Gemini로 재전사'}
               </div>
+            </button>
+            <button
+              onClick={() => setShowRetranscribeChoice(false)}
+              style={{
+                flex: meetingRoomMode ? undefined : 1, padding: '0.75rem', background: 'var(--bg-hover)',
+                border: '1px solid var(--border)', borderRadius: '8px',
+                cursor: 'pointer', textAlign: meetingRoomMode ? 'center' : 'left',
+              }}
+            >
+              <div style={{ fontWeight: meetingRoomMode ? 400 : 700, fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                {meetingRoomMode ? '현재 결과 사용' : 'Web Speech 결과 사용'}
+              </div>
+              {!meetingRoomMode && <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>실시간 인식된 텍스트 · 즉시 진행</div>}
             </button>
           </div>
         </div>

@@ -29,6 +29,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const body = await req.json() as {
       title?: string; content?: string
       speakerMap?: Record<string, string>
+      qualityRating?: 'good' | 'ok' | 'poor'
+    }
+
+    // 품질 평가만 업데이트하는 경우
+    if (body.qualityRating && !body.title && !body.speakerMap) {
+      const db = getAdminDb()
+      await db.collection('notes').doc(id).update({
+        qualityRating: body.qualityRating,
+        updatedAt: new Date(),
+      })
+      return NextResponse.json({ id, qualityRating: body.qualityRating })
     }
 
     // 화자 매핑만 업데이트하는 경우
@@ -61,11 +72,25 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!title?.trim()) return NextResponse.json({ error: '제목은 필수입니다.' }, { status: 400 })
 
     const db = getAdminDb()
+
+    // DPO: 편집 전 버전을 contentRevisions에 보존
+    const doc = await db.collection('notes').doc(id).get()
+    const prevData = doc.data()
+
     const updates: Record<string, unknown> = {
       title: title.trim(),
       content: content ?? '',
       updatedAt: new Date(),
       word_count: (content ?? '').split(/\s+/).filter(Boolean).length,
+      editCount: (prevData?.editCount ?? 0) + 1,
+    }
+
+    // 본문이 실제로 변경된 경우에만 revision 추가
+    if (prevData?.content && prevData.content !== (content ?? '')) {
+      updates.contentRevisions = FieldValue.arrayUnion({
+        content: prevData.content,
+        editedAt: new Date().toISOString(),
+      })
     }
 
     if (process.env.GEMINI_API_KEY) {
