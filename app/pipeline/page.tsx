@@ -205,15 +205,16 @@ export default function PipelinePage() {
       {
         id: 'transcribe', type: 'pipeline', position: { x: 300, y: 50 },
         data: {
-          label: '음성 전사', icon: '📝', status: wh.online ? 'active' : 'idle',
+          label: 'Whisper + pyannote', icon: '📝', status: wh.online ? 'active' : 'idle',
           stats: [
-            { label: 'Gemini', value: 'Flash 2.5' },
-            { label: 'Whisper', value: wh.online ? wh.model : 'paused' },
-            { label: '화자분리', value: wh.diarization ? 'ON' : 'OFF' },
+            { label: 'STT', value: wh.online ? `Whisper ${wh.model}` : 'paused' },
+            { label: '화자분리', value: wh.diarization ? 'pyannote 3.1' : 'OFF' },
+            { label: 'fallback', value: 'Gemini 2.5' },
           ],
-          description: 'Gemini 2.5 Flash 또는 Whisper + pyannote로 음성을 텍스트로 변환해요. Whisper는 한국어 정확도가 더 높고, pyannote가 화자를 자동으로 구분해줘요.',
+          description: 'Whisper large-v3 (한국어 전문 STT) + pyannote 3.1 (화자분리)로 음성을 전사해요. GPU(T4)에서 실행되고, 필요할 때만 자동으로 깨어나요. Gemini는 fallback으로 유지.',
           actions: [
             { label: 'Whisper Space 깨우기', onClick: () => {} },
+            { label: 'HF Space 보기', onClick: () => {} },
           ],
         },
       },
