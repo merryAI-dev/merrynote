@@ -3,6 +3,7 @@ import { getAdminDb } from '@/lib/firebase-admin'
 import { FieldValue } from 'firebase-admin/firestore'
 import { generateEmbedding } from '@/lib/gemini'
 import { extractStructured } from '@/lib/claude'
+import { publishMessage } from '@/lib/kafka'
 
 export async function GET() {
   try {
@@ -81,6 +82,18 @@ export async function POST(req: NextRequest) {
       editCount: 0,
       createdAt: FieldValue.serverTimestamp(),
     })
+
+    // Kafka: 학습 데이터 동기화 이벤트
+    publishMessage('training.sync', ref.id, {
+      type: 'note_created',
+      noteId: ref.id,
+      title,
+      content,
+      transcript: transcript ?? null,
+      generatedContent: genContent,
+      isEdited,
+      previousGenerations: previous_generations ?? [],
+    }).catch(() => {}) // Kafka 실패해도 저장은 성공
 
     return NextResponse.json({ id: ref.id }, { status: 201 })
   } catch (err: unknown) {

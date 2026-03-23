@@ -9,7 +9,7 @@
 const HF_TOKEN = process.env.HF_TOKEN
 if (!HF_TOKEN) { console.error('HF_TOKEN 환경변수가 필요합니다.'); process.exit(1) }
 
-const REPO_ID = 'merryAI-dev/merrynote-training-data'
+const REPO_ID = process.env.HF_DATASET_REPO || 'boramintheMYSC/merrynote-training-data'
 const API = 'https://huggingface.co/api'
 const headers = { Authorization: `Bearer ${HF_TOKEN}`, 'Content-Type': 'application/json' }
 

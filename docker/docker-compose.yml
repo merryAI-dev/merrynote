@@ -47,6 +47,17 @@ services:
       COMPUTE_TYPE: ${COMPUTE_TYPE:-int8}
     restart: unless-stopped
 
+  # ── Training Worker (Kafka → HF Dataset 동기화) ─────
+  training-worker:
+    build: ./training-worker
+    depends_on:
+      - kafka
+    environment:
+      KAFKA_BOOTSTRAP: kafka:29092
+      HF_TOKEN: ${HF_TOKEN}
+      HF_DATASET_REPO: ${HF_DATASET_REPO:-boramintheMYSC/merrynote-training-data}
+    restart: unless-stopped
+
   # ── Worker (Kafka Consumer → Qwen → Firestore) ─────
   worker:
     build: ./worker

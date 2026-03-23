@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { getAdminDb } from '@/lib/firebase-admin'
 import { FieldValue } from 'firebase-admin/firestore'
 import { generateEmbedding } from '@/lib/gemini'
+import { publishMessage } from '@/lib/kafka'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -100,6 +101,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
 
     await db.collection('notes').doc(id).update(updates)
+
+    // Kafka: 편집 이벤트 → 학습 데이터 동기화
+    if (prevData?.content && prevData.content !== (content ?? '')) {
+      publishMessage('training.sync', id, {
+        type: 'note_edited',
+        noteId: id,
+        title: title?.trim(),
+        content: content ?? '',
+        transcript: prevData.transcript ?? null,
+        generatedContent: prevData.generatedContent ?? null,
+        previousContent: prevData.content,
+      }).catch(() => {})
+    }
+
     return NextResponse.json({ id, title: updates.title, content: updates.content })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'DB 오류' }, { status: 500 })
