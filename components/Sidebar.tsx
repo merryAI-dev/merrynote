@@ -10,6 +10,7 @@ const navItems = [
   { href: '/upload', label: '업로드', icon: '△' },
   { href: '/chat', label: '챗봇', icon: '◉' },
   { href: '/vocab', label: '단어장', icon: '◎' },
+  { href: '/pipeline', label: 'Pipeline', icon: '⬡' },
 ]
 
 export default function Sidebar() {
