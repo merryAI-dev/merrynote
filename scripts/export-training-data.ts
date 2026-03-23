@@ -150,6 +150,56 @@ async function main() {
   for (const [source, count] of Object.entries(sources)) {
     console.log(`   ${source}: ${count}건`)
   }
+
+  // ── HF Dataset push (HF_TOKEN이 있을 때만) ──
+  if (process.env.HF_TOKEN) {
+    await pushToHFDataset(sftRows, dpoRows)
+  } else {
+    console.log('\n💡 HF_TOKEN을 설정하면 HuggingFace Dataset에 자동 업로드됩니다.')
+  }
+}
+
+// ── HF Dataset 업로드 ────────────────────────────────────────────────────────
+async function pushToHFDataset(sftRows: SFTRow[], dpoRows: DPORow[]) {
+  const token = process.env.HF_TOKEN!
+  const repoId = process.env.HF_DATASET_REPO || 'merryAI-dev/merrynote-training-data'
+  const today = new Date().toISOString().slice(0, 10)
+
+  console.log(`\n📤 HF Dataset 업로드: ${repoId}`)
+
+  const sftJsonl = sftRows.map(r => JSON.stringify(r)).join('\n') + '\n'
+  const dpoJsonl = dpoRows.map(r => JSON.stringify(r)).join('\n') + '\n'
+
+  for (const [path, content, label] of [
+    ['sft/train.jsonl', sftJsonl, 'SFT'],
+    ['dpo/train.jsonl', dpoJsonl, 'DPO'],
+  ] as const) {
+    const res = await fetch(
+      `https://huggingface.co/api/datasets/${repoId}/commit/main`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          summary: `${label} 데이터 업데이트 (${label === 'SFT' ? sftRows.length : dpoRows.length}건) — ${today}`,
+          files: [{
+            path,
+            content: Buffer.from(content).toString('base64'),
+            encoding: 'base64',
+          }],
+        }),
+      },
+    )
+    if (res.ok) {
+      console.log(`   ${label}: ${path} 업로드 완료`)
+    } else {
+      console.warn(`   ${label}: 업로드 실패 (${res.status})`)
+    }
+  }
+
+  console.log(`   https://huggingface.co/datasets/${repoId}`)
 }
 
 main().catch(e => { console.error(e); process.exit(1) })

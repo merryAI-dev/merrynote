@@ -1,0 +1,85 @@
+name: 주간 학습 데이터 동기화 + Qwen 학습
+
+on:
+  schedule:
+    - cron: '0 1 * * 1'  # 매주 월요일 오전 10시 KST (UTC 01:00)
+  workflow_dispatch:       # 수동 실행 버튼
+
+jobs:
+  sync-and-train:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Node.js 설정
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 의존성 설치
+        run: |
+          npm install tsx firebase-admin
+          pip install huggingface_hub
+
+      # ── Step 1: Firestore → 로컬 JSONL + HF Dataset 업로드 ──
+      - name: 학습 데이터 동기화
+        run: npx tsx scripts/export-training-data.ts
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      # ── Step 2: 데이터 건수 확인 ──
+      - name: 데이터 충분성 확인
+        id: check
+        run: |
+          SFT_COUNT=$(wc -l < training-data/merrynote-sft.jsonl 2>/dev/null || echo "0")
+          DPO_COUNT=$(wc -l < training-data/merrynote-dpo.jsonl 2>/dev/null || echo "0")
+          echo "📊 SFT: ${SFT_COUNT}건, DPO: ${DPO_COUNT}건"
+          # SFT 20건 이상이면 학습 가능
+          if [ "$SFT_COUNT" -ge 20 ]; then
+            echo "sft_enough=true" >> $GITHUB_OUTPUT
+          else
+            echo "sft_enough=false" >> $GITHUB_OUTPUT
+            echo "⚠️ SFT 데이터가 20건 미만이라 학습을 건너뜁니다."
+          fi
+          # DPO 30건 이상이면 DPO 학습 가능
+          if [ "$DPO_COUNT" -ge 30 ]; then
+            echo "dpo_enough=true" >> $GITHUB_OUTPUT
+          else
+            echo "dpo_enough=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Step 3: SFT 학습 안내 ──
+      - name: SFT 학습 준비
+        if: steps.check.outputs.sft_enough == 'true'
+        run: python scripts/training/launch_jobs.py --task sft
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      # ── Step 4: DPO 학습 안내 ──
+      - name: DPO 학습 준비
+        if: steps.check.outputs.dpo_enough == 'true'
+        run: python scripts/training/launch_jobs.py --task dpo
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+
+      # ── 요약 ──
+      - name: 결과 요약
+        run: |
+          echo "═══════════════════════════════════"
+          echo "  MerryNote 주간 학습 데이터 동기화"
+          echo "═══════════════════════════════════"
+          SFT=$(wc -l < training-data/merrynote-sft.jsonl 2>/dev/null || echo "0")
+          DPO=$(wc -l < training-data/merrynote-dpo.jsonl 2>/dev/null || echo "0")
+          echo "  SFT: ${SFT}건"
+          echo "  DPO: ${DPO}건"
+          echo "  Dataset: https://huggingface.co/datasets/merryAI-dev/merrynote-training-data"
+          echo "═══════════════════════════════════"
