@@ -1,0 +1,6 @@
+torch>=2.0
+torchaudio>=2.0
+transformers>=4.36
+datasets>=2.16
+peft>=0.7
+accelerate>=0.25
