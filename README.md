@@ -1,6 +1,6 @@
-# yapnotes
+# MerryNote
 
-> Just yap — your meeting notes write themselves.
+> MerryNote — your meeting notes write themselves.
 >
 > 말만 하세요. 회의록은 알아서 써집니다.
 
@@ -19,8 +19,10 @@ No more frantic note-taking. No more "can you share the meeting notes?" Just tal
 ## Installation / 설치
 
 ```bash
-npx yapnotes
+npx merrynote
 ```
+
+Legacy alias: `npx yapnotes`
 
 The interactive installer will: / 인터랙티브 설치가 진행됩니다:
 1. Set your output directory / 요약 파일 저장 경로 설정
@@ -42,7 +44,7 @@ The interactive installer will: / 인터랙티브 설치가 진행됩니다:
 1. Run `Record Meeting` — start your meeting / 녹음 시작
 2. Have your meeting... / 회의를 진행하세요...
 3. Run `Finish Record Meeting` — enter a title / 제목 입력
-4. yapnotes handles the rest: stop → transcribe → summarize → open .md / 나머지는 자동: 종료 → 전사 → 요약 → 파일 열기
+4. MerryNote handles the rest: stop → transcribe → summarize → open .md / 나머지는 자동: 종료 → 전사 → 요약 → 파일 열기
 
 ### Option 2: Claude Code skill (manual paste / 수동 붙여넣기)
 

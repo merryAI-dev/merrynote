@@ -53,14 +53,14 @@ if [ -z "$CLAUDE_PATH" ]; then
 fi
 
 # 공유 프롬프트 템플릿 + MYSC vocab
-YAPNOTES_ROOT="$SCRIPT_DIR/.."
-PROMPT_TEMPLATE="$YAPNOTES_ROOT/prompts/summarize.md"
+MERRYNOTE_ROOT="$SCRIPT_DIR/.."
+PROMPT_TEMPLATE="$MERRYNOTE_ROOT/prompts/summarize.md"
 
 if [ -f "$PROMPT_TEMPLATE" ]; then
     PROMPT=$(cat "$PROMPT_TEMPLATE")
     PROMPT="${PROMPT//\{\{TITLE\}\}/$TITLE}"
     PROMPT="${PROMPT//\{\{DATE\}\}/$TODAY}"
-    VOCAB=$(cat "$YAPNOTES_ROOT/vocab/names.md" "$YAPNOTES_ROOT/vocab/glossary.md" 2>/dev/null || true)
+    VOCAB=$(cat "$MERRYNOTE_ROOT/vocab/names.md" "$MERRYNOTE_ROOT/vocab/glossary.md" 2>/dev/null || true)
     SUMMARY=$(printf '%s\n\n## MYSC 어휘\n%s\n\n---\n\n전사문:\n%s' "$PROMPT" "$VOCAB" "$TRANSCRIPT" \
         | "$CLAUDE_PATH" -p --dangerously-skip-permissions 2>/dev/null)
 else

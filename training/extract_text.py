@@ -3,7 +3,7 @@
 
 Usage:
     python extract_text.py summary.md              # 텍스트 출력
-    python extract_text.py --dir ~/.yapnotes/training-data  # 전체 변환
+    python extract_text.py --dir ~/.merrynote/training-data  # 전체 변환
 """
 
 import re

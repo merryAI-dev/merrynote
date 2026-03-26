@@ -13,8 +13,10 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SWIFT_SCRIPT="$SCRIPT_DIR/transcribe.swift"
-CACHE_DIR="$HOME/.yapnotes-cache"
+CACHE_DIR="$HOME/.merrynote-cache"
+LEGACY_CACHE_DIR="$HOME/.yapnotes-cache"
 mkdir -p "$CACHE_DIR"
+[ -e "$LEGACY_CACHE_DIR" ] || ln -sf "$CACHE_DIR" "$LEGACY_CACHE_DIR" 2>/dev/null || true
 
 # ── 인자 파싱 ──────────────────────────────────────────
 AUDIO_FILE="${1:-}"
@@ -47,7 +49,7 @@ if ! echo "$SUPPORTED" | grep -qw "$EXT_LOWER"; then
 fi
 
 echo ""
-echo "🎙️  MYSC yapnotes — M4A 전사 시작"
+echo "🎙️  MYSC MerryNote — M4A 전사 시작"
 echo "=================================="
 echo "파일: $(basename "$AUDIO_FILE")"
 echo ""

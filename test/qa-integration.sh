@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
-# yapnotes 통합 QA 테스트
+# MerryNote 통합 QA 테스트
 #
 # 실제 오디오 파일로 전체 파이프라인을 테스트한다.
 # 함수 단위가 아닌 기능 단위 + 소요 시간 중심.
@@ -14,11 +14,13 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YAPNOTES_ROOT="$(dirname "$SCRIPT_DIR")"
-SCRIPTS="$YAPNOTES_ROOT/scripts"
-DAEMON="$YAPNOTES_ROOT/daemon"
-PROMPTS="$YAPNOTES_ROOT/prompts"
-TRAINING="$YAPNOTES_ROOT/training"
+MERRYNOTE_ROOT="$(dirname "$SCRIPT_DIR")"
+SCRIPTS="$MERRYNOTE_ROOT/scripts"
+DAEMON="$MERRYNOTE_ROOT/daemon"
+PROMPTS="$MERRYNOTE_ROOT/prompts"
+TRAINING="$MERRYNOTE_ROOT/training"
+CONFIG_PATH="$HOME/.merrynote/config.json"
+[ -f "$CONFIG_PATH" ] || [ ! -f "$HOME/.yapnotes/config.json" ] || CONFIG_PATH="$HOME/.yapnotes/config.json"
 
 # 색상
 RED='\033[0;31m'
@@ -62,7 +64,7 @@ skip() {
 section() { printf "\n${CYAN}━━━ %s ━━━${NC}\n" "$1"; }
 
 # ── 테스트용 오디오 생성 ─────────────────────────────────────────────
-TMP_DIR=$(mktemp -d /tmp/yapnotes-qa-XXXXXX)
+TMP_DIR=$(mktemp -d /tmp/merrynote-qa-XXXXXX)
 trap 'rm -rf "$TMP_DIR"' EXIT
 
 # 10초 무음 wav (빠른 테스트용)
@@ -84,7 +86,7 @@ create_bad_files() {
 section "SUITE 1: 파일 & 의존성 검증"
 
 timer_start
-for f in "$SCRIPTS/transcribe.sh" "$DAEMON/yapnotesd.sh" "$PROMPTS/summarize.md" \
+for f in "$SCRIPTS/transcribe.sh" "$DAEMON/merrynoted.sh" "$PROMPTS/summarize.md" \
          "$SCRIPTS/watch-inbox.sh" "$SCRIPTS/transcribe.swift"; do
     if [ ! -f "$f" ]; then
         timer_end; fail "파일 존재: $(basename $f)" "파일 없음"
@@ -111,7 +113,7 @@ fi
 
 timer_start
 bash -n "$SCRIPTS/transcribe.sh" 2>/dev/null && \
-bash -n "$DAEMON/yapnotesd.sh" 2>/dev/null && \
+bash -n "$DAEMON/merrynoted.sh" 2>/dev/null && \
 bash -n "$SCRIPTS/watch-inbox.sh" 2>/dev/null
 timer_end
 if [ $? -eq 0 ]; then pass "전 스크립트 bash 문법 검증"; else fail "bash 문법" "syntax error"; fi
@@ -313,7 +315,7 @@ fi
 
 # vocab 로드
 timer_start
-VOCAB=$(cat "$YAPNOTES_ROOT/vocab/names.md" "$YAPNOTES_ROOT/vocab/glossary.md" 2>/dev/null)
+VOCAB=$(cat "$MERRYNOTE_ROOT/vocab/names.md" "$MERRYNOTE_ROOT/vocab/glossary.md" 2>/dev/null)
 VOCAB_LINES=$(echo "$VOCAB" | wc -l | tr -d ' ')
 timer_end
 if [ "$VOCAB_LINES" -gt 50 ]; then
@@ -328,14 +330,16 @@ fi
 section "SUITE 6: 데몬 & 설정"
 
 timer_start
-if launchctl list 2>/dev/null | grep -q "com.mysc.yapnotes"; then
-    timer_end; pass "데몬 실행 중 (com.mysc.yapnotes)"
+if launchctl list 2>/dev/null | grep -q "com.mysc.merrynote"; then
+    timer_end; pass "데몬 실행 중 (com.mysc.merrynote)"
+elif launchctl list 2>/dev/null | grep -q "com.mysc.yapnotes"; then
+    timer_end; pass "legacy 데몬 실행 중 (com.mysc.yapnotes)"
 else
     timer_end; fail "데몬 상태" "실행 안 됨"
 fi
 
 timer_start
-CONFIG=$(cat ~/.yapnotes/config.json 2>/dev/null)
+CONFIG=$(cat "$CONFIG_PATH" 2>/dev/null)
 timer_end
 if echo "$CONFIG" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
     pass "config.json 유효한 JSON"
@@ -344,7 +348,7 @@ else
 fi
 
 timer_start
-OUTPUT_DIR=$(python3 -c "import json; print(json.load(open('$HOME/.yapnotes/config.json')).get('output_dir',''))" 2>/dev/null)
+OUTPUT_DIR=$(python3 -c "import json; print(json.load(open('$CONFIG_PATH')).get('output_dir',''))" 2>/dev/null)
 timer_end
 if [ -d "$OUTPUT_DIR" ]; then
     NOTE_COUNT=$(ls "$OUTPUT_DIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
@@ -359,13 +363,13 @@ fi
 section "SUITE 7: 학습 데이터 수집 인프라"
 
 timer_start
-COLLECT=$(python3 -c "import json; print(json.load(open('$HOME/.yapnotes/config.json')).get('collect_training_data','true'))" 2>/dev/null || echo "true")
+COLLECT=$(python3 -c "import json; print(json.load(open('$CONFIG_PATH')).get('collect_training_data','true'))" 2>/dev/null || echo "true")
 timer_end
 pass "학습 데이터 수집 설정: $COLLECT"
 
 timer_start
 # collect_training_data 함수가 데몬에 있는지
-if grep -q "collect_training_data()" "$DAEMON/yapnotesd.sh"; then
+if grep -q "collect_training_data()" "$DAEMON/merrynoted.sh"; then
     timer_end; pass "데몬에 collect_training_data() 함수 존재"
 else
     timer_end; fail "collect_training_data()" "함수 없음"
@@ -441,7 +445,7 @@ fi
 # 결과 요약
 # ═══════════════════════════════════════════════════════════════════
 printf "\n${CYAN}═══════════════════════════════════════════════${NC}\n"
-printf "${CYAN}  yapnotes QA 통합 테스트 결과${NC}\n"
+printf "${CYAN}  MerryNote QA 통합 테스트 결과${NC}\n"
 printf "${CYAN}═══════════════════════════════════════════════${NC}\n\n"
 
 for r in "${RESULTS[@]}"; do

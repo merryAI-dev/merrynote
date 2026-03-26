@@ -6,7 +6,7 @@
 # ─────────────────────────────────────────────────────────
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YAPNOTES_ROOT="$(dirname "$SCRIPT_DIR")"
+MERRYNOTE_ROOT="$(dirname "$SCRIPT_DIR")"
 NOTES_DIR="$HOME/meeting-notes"
 mkdir -p "$NOTES_DIR"
 
@@ -28,13 +28,13 @@ SAFE_TITLE=$(echo "$TITLE" | tr ' ' '-' | tr '/' '-')
 OUTPUT_FILE="$NOTES_DIR/${TODAY}-${SAFE_TITLE}.md"
 
 # 진행 알림
-osascript -e "display notification \"$BASENAME 전사 시작...\" with title \"yapnotes 🎙️\""
+osascript -e "display notification \"$BASENAME 전사 시작...\" with title \"MerryNote 🎙️\""
 
 # 전사
-TRANSCRIPT=$(swift "$YAPNOTES_ROOT/scripts/transcribe.swift" "$AUDIO_FILE" 2>/tmp/yapnotes-sel-err.txt)
+TRANSCRIPT=$(swift "$MERRYNOTE_ROOT/scripts/transcribe.swift" "$AUDIO_FILE" 2>/tmp/merrynote-sel-err.txt)
 
 if [ -z "$TRANSCRIPT" ]; then
-    ERR=$(cat /tmp/yapnotes-sel-err.txt)
+    ERR=$(cat /tmp/merrynote-sel-err.txt)
     osascript -e "display alert \"전사 실패\" message \"$ERR\""
     exit 1
 fi
@@ -54,4 +54,4 @@ else
 fi
 
 open "$OUTPUT_FILE"
-osascript -e "display notification \"$BASENAME → 회의록 완성 ✅ ($WORD_COUNT 단어)\" with title \"yapnotes\""
+osascript -e "display notification \"$BASENAME → 회의록 완성 ✅ ($WORD_COUNT 단어)\" with title \"MerryNote\""

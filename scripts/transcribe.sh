@@ -17,10 +17,11 @@ set -uo pipefail
 
 AUDIO_FILE="$1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YAPNOTES_ROOT="$(dirname "$SCRIPT_DIR")"
+MERRYNOTE_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # ── config에서 모델 설정 읽기 ─────────────────────────────────────
-CONFIG_FILE="$HOME/.yapnotes/config.json"
+CONFIG_FILE="$HOME/.merrynote/config.json"
+[ -f "$CONFIG_FILE" ] || [ ! -f "$HOME/.yapnotes/config.json" ] || CONFIG_FILE="$HOME/.yapnotes/config.json"
 TRANSCRIBE_MODEL=$(python3 -c "
 import json
 try: print(json.load(open('$CONFIG_FILE')).get('transcribe_model', 'whisper-cpp'))
@@ -75,7 +76,7 @@ if [ "$DURATION_SEC" -gt 14400 ]; then
 fi
 
 # ── m4a → wav 변환 (whisper는 wav 필요) ───────────────────────────
-TMP_WAV=$(mktemp /tmp/yapnotes-XXXXXX.wav)
+TMP_WAV=$(mktemp /tmp/merrynote-XXXXXX.wav)
 trap 'rm -f "$TMP_WAV"' EXIT
 
 echo "🔄 오디오 변환 중... (${DURATION_MIN}분 분량)" >&2
@@ -91,7 +92,7 @@ BASENAME=$(basename "$AUDIO_FILE")
 if [ "$TRANSCRIBE_MODEL" = "fine-tuned" ] && [ -n "$FINETUNED_MODEL_PATH" ]; then
     FINETUNED_MODEL_PATH="${FINETUNED_MODEL_PATH/#\~/$HOME}"
     echo "🎙️  전사 중... (파일: $BASENAME, 모델: fine-tuned)" >&2
-    if WHISPER_OUTPUT=$(python3 "$YAPNOTES_ROOT/training/transcribe_finetuned.py" \
+    if WHISPER_OUTPUT=$(python3 "$MERRYNOTE_ROOT/training/transcribe_finetuned.py" \
         --audio "$TMP_WAV" --model "$FINETUNED_MODEL_PATH" 2>/dev/null); then
         echo "$WHISPER_OUTPUT"
         exit 0

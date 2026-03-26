@@ -3,20 +3,134 @@
 const fs = require("fs");
 const path = require("path");
 const readline = require("readline");
-const { execSync } = require("child_process");
+const { execSync, spawn, spawnSync } = require("child_process");
 
-const rl = readline.createInterface({
-  input: process.stdin,
-  output: process.stdout,
-});
+const HOME = process.env.HOME;
+const pkgDir = path.resolve(__dirname, "..");
 
-function ask(question) {
-  return new Promise((resolve) => rl.question(question, resolve));
+const BRAND = "MerryNote";
+const CLI_NAME = "merrynote";
+const LEGACY_CLI_NAME = "yapnotes";
+const SERVICE_LABEL = "com.mysc.merrynote";
+const LEGACY_SERVICE_LABEL = "com.mysc.yapnotes";
+const CONFIG_DIR = path.join(HOME, ".merrynote");
+const LEGACY_CONFIG_DIR = path.join(HOME, ".yapnotes");
+const CONFIG_FILE = path.join(CONFIG_DIR, "config.json");
+const LEGACY_CONFIG_FILE = path.join(LEGACY_CONFIG_DIR, "config.json");
+const LOG_FILE = path.join(CONFIG_DIR, "merrynote.log");
+const LEGACY_LOG_FILE = path.join(LEGACY_CONFIG_DIR, "yapnotes.log");
+const CACHE_DIR = path.join(HOME, ".merrynote-cache");
+const LEGACY_CACHE_DIR = path.join(HOME, ".yapnotes-cache");
+const PLIST_DEST = path.join(HOME, "Library/LaunchAgents/com.mysc.merrynote.plist");
+const LEGACY_PLIST_DEST = path.join(HOME, "Library/LaunchAgents/com.mysc.yapnotes.plist");
+const PRIMARY_INBOX_NAME = "merrynote-inbox";
+const LEGACY_INBOX_NAME = "yapnotes-inbox";
+
+const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+
+function ask(q) {
+  return new Promise((resolve) => rl.question(q, resolve));
 }
 
 function copyFile(src, dest) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.copyFileSync(src, dest);
+}
+
+function fileExists(fp) {
+  try {
+    return fs.existsSync(fp);
+  } catch {
+    return false;
+  }
+}
+
+function firstExisting(primary, legacy) {
+  if (fileExists(primary)) return primary;
+  if (legacy && fileExists(legacy)) return legacy;
+  return primary;
+}
+
+function ensureSymlink(target, linkPath) {
+  fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+  if (fs.existsSync(linkPath)) {
+    const stat = fs.lstatSync(linkPath);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) return;
+    if (stat.isSymbolicLink()) {
+      const current = fs.readlinkSync(linkPath);
+      if (current === target) return;
+    }
+    fs.rmSync(linkPath, { force: true, recursive: true });
+  }
+
+  try {
+    fs.symlinkSync(target, linkPath);
+  } catch {
+    if (!fs.existsSync(linkPath) && fs.existsSync(target) && fs.statSync(target).isFile()) {
+      fs.copyFileSync(target, linkPath);
+    }
+  }
+}
+
+function syncLegacyState() {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(LEGACY_CONFIG_DIR, { recursive: true });
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+
+  if (!fileExists(CONFIG_FILE) && fileExists(LEGACY_CONFIG_FILE)) {
+    fs.copyFileSync(LEGACY_CONFIG_FILE, CONFIG_FILE);
+  }
+  if (!fileExists(LEGACY_CONFIG_FILE) && fileExists(CONFIG_FILE)) {
+    fs.copyFileSync(CONFIG_FILE, LEGACY_CONFIG_FILE);
+  }
+
+  if (!fileExists(LOG_FILE) && fileExists(LEGACY_LOG_FILE)) {
+    fs.copyFileSync(LEGACY_LOG_FILE, LOG_FILE);
+  }
+  if (!fileExists(LOG_FILE)) {
+    fs.writeFileSync(LOG_FILE, "");
+  }
+
+  ensureSymlink(LOG_FILE, LEGACY_LOG_FILE);
+  if (!fileExists(LEGACY_CACHE_DIR)) ensureSymlink(CACHE_DIR, LEGACY_CACHE_DIR);
+
+  const primaryInbox = path.join(HOME, "Library/Mobile Documents/com~apple~CloudDocs", PRIMARY_INBOX_NAME);
+  const legacyInbox = path.join(HOME, "Library/Mobile Documents/com~apple~CloudDocs", LEGACY_INBOX_NAME);
+  fs.mkdirSync(primaryInbox, { recursive: true });
+  fs.mkdirSync(legacyInbox, { recursive: true });
+}
+
+function writeSharedConfig(config) {
+  syncLegacyState();
+  const payload = JSON.stringify(config, null, 2) + "\n";
+  fs.writeFileSync(CONFIG_FILE, payload);
+  fs.writeFileSync(LEGACY_CONFIG_FILE, payload);
+}
+
+function getLogFilePath() {
+  return firstExisting(LOG_FILE, LEGACY_LOG_FILE);
+}
+
+function getInstalledPlistPath() {
+  return firstExisting(PLIST_DEST, LEGACY_PLIST_DEST);
+}
+
+function isServiceRunningFor(label) {
+  try {
+    return execSync(`launchctl list ${label} 2>/dev/null`, { encoding: "utf-8" }).includes('"PID"');
+  } catch {
+    return false;
+  }
+}
+
+function detectServiceLabel() {
+  if (isServiceRunningFor(SERVICE_LABEL) || fileExists(PLIST_DEST)) return SERVICE_LABEL;
+  if (isServiceRunningFor(LEGACY_SERVICE_LABEL) || fileExists(LEGACY_PLIST_DEST)) return LEGACY_SERVICE_LABEL;
+  return SERVICE_LABEL;
+}
+
+function migrateLegacyState() {
+  syncLegacyState();
 }
 
 function hasClaude() {
@@ -29,11 +143,7 @@ function hasClaude() {
 }
 
 function hasRaycast() {
-  try {
-    return fs.existsSync("/Applications/Raycast.app");
-  } catch {
-    return false;
-  }
+  return fileExists("/Applications/Raycast.app");
 }
 
 function hasBrew() {
@@ -45,274 +155,314 @@ function hasBrew() {
   }
 }
 
-function installRaycastApp() {
-  if (!hasBrew()) {
-    console.log("");
-    console.log("⚠️  Homebrew not found. Install Raycast manually:");
-    console.log("   Homebrew가 없습니다. Raycast를 직접 설치해주세요:");
-    console.log("   https://raycast.com/");
-    return false;
-  }
-  console.log("");
-  console.log("📦 Installing Raycast via Homebrew...");
-  console.log("   Homebrew로 Raycast를 설치합니다...");
+function hasSwiftBar() {
+  return fileExists("/Applications/SwiftBar.app") || fileExists(path.join(HOME, "Applications/SwiftBar.app"));
+}
+
+function installLaunchAgent(outputDir, watchDownloads, extraWatchDir) {
+  migrateLegacyState();
+
+  const merrynoteRoot = pkgDir;
+  const plistSrc = path.join(pkgDir, "daemon", "com.mysc.merrynote.plist");
+  const legacyPlistSrc = path.join(pkgDir, "daemon", "com.mysc.yapnotes.plist");
+  let content = fs.readFileSync(plistSrc, "utf-8");
+  content = content
+    .replace(/MERRYNOTE_ROOT_PLACEHOLDER/g, merrynoteRoot)
+    .replace(/LOG_FILE_PLACEHOLDER/g, LOG_FILE)
+    .replace(/HOME_PLACEHOLDER/g, HOME);
+
+  let legacyContent = fs.readFileSync(legacyPlistSrc, "utf-8");
+  legacyContent = legacyContent
+    .replace(/MERRYNOTE_ROOT_PLACEHOLDER/g, merrynoteRoot)
+    .replace(/LOG_FILE_PLACEHOLDER/g, LOG_FILE)
+    .replace(/HOME_PLACEHOLDER/g, HOME);
+
+  fs.mkdirSync(path.dirname(PLIST_DEST), { recursive: true });
+  fs.writeFileSync(PLIST_DEST, content, "utf-8");
+  fs.writeFileSync(LEGACY_PLIST_DEST, legacyContent, "utf-8");
+
+  const config = { output_dir: outputDir, watch_downloads: watchDownloads };
+  if (extraWatchDir) config.extra_watch_dir = extraWatchDir;
+  writeSharedConfig(config);
+
   try {
-    execSync("brew install --cask raycast", { stdio: "inherit" });
-    console.log("✅ Raycast installed! / Raycast 설치 완료!");
-    return true;
-  } catch {
-    console.log("⚠️  Installation failed. Install manually: https://raycast.com/");
-    console.log("   설치에 실패했습니다. 직접 설치해주세요: https://raycast.com/");
-    return false;
+    execSync(`launchctl unload "${PLIST_DEST}" 2>/dev/null`, { stdio: "ignore" });
+  } catch {}
+  try {
+    execSync(`launchctl unload "${LEGACY_PLIST_DEST}" 2>/dev/null`, { stdio: "ignore" });
+  } catch {}
+  execSync(`launchctl load "${PLIST_DEST}"`);
+}
+
+function installSwiftBar() {
+  const pluginDirs = [
+    path.join(HOME, "Library/Application Support/SwiftBar/Plugins"),
+    path.join(HOME, ".swiftbar"),
+  ];
+  const src = path.join(pkgDir, "menubar", "merrynote.5m.sh");
+  for (const dir of pluginDirs) {
+    if (fileExists(path.dirname(dir)) || dir.includes("SwiftBar")) {
+      try {
+        fs.mkdirSync(dir, { recursive: true });
+        const dest = path.join(dir, "merrynote.5m.sh");
+        fs.copyFileSync(src, dest);
+        fs.chmodSync(dest, "755");
+        console.log(`   ✅ SwiftBar 플러그인 설치됨: ${dest}`);
+        return;
+      } catch {}
+    }
+  }
+  console.log("   ⚠️  SwiftBar 플러그인 폴더를 찾을 수 없음");
+  console.log(`   수동으로 복사: ${src}`);
+}
+
+function installRaycast(claudePath, outputDir) {
+  const defaultScriptDir = path.join(HOME, "raycast-scripts");
+  const scriptDir = defaultScriptDir;
+  fs.mkdirSync(scriptDir, { recursive: true });
+
+  const raycastSrc = path.join(pkgDir, "raycast-scripts");
+  for (const file of fs.readdirSync(raycastSrc)) {
+    const src = path.join(raycastSrc, file);
+    const dest = path.join(scriptDir, file);
+    if (file.endsWith(".sh")) {
+      let content = fs.readFileSync(src, "utf-8");
+      content = content.replace(/CLAUDE_PATH_PLACEHOLDER/g, claudePath);
+      fs.writeFileSync(dest, content, "utf-8");
+      fs.chmodSync(dest, "755");
+    } else {
+      fs.copyFileSync(src, dest);
+    }
+  }
+
+  const configFile = path.join(scriptDir, "meeting-config.json");
+  fs.writeFileSync(configFile, JSON.stringify({ output_dir: outputDir, language: "ko" }, null, 2) + "\n");
+  console.log(`   → Raycast 스크립트: ${scriptDir}/`);
+  console.log("   Raycast 설정 > Extensions > Script Commands > Add Directories 에서 위 경로 추가하세요");
+}
+
+function handleCommand(cmd) {
+  migrateLegacyState();
+  const serviceLabel = detectServiceLabel();
+  const plistPath = getInstalledPlistPath();
+  const logPath = getLogFilePath();
+
+  switch (cmd) {
+    case "status": {
+      console.log(`\n🎙️  ${BRAND} 상태\n`);
+      if (fileExists(plistPath) || isServiceRunningFor(serviceLabel)) {
+        const running = isServiceRunningFor(serviceLabel);
+        console.log(running ? "  ✅ 데몬 실행 중" : "  ❌ 데몬 중지됨");
+        console.log(`  • LaunchAgent: ${serviceLabel}`);
+      } else {
+        console.log(`  ❌ LaunchAgent 미설치 (npx ${CLI_NAME}로 설치하세요)`);
+      }
+      console.log("\n── 최근 로그 ──────────────────────────────");
+      try {
+        const log = execSync(`tail -20 "${logPath}" 2>/dev/null || echo "(로그 없음)"`, { encoding: "utf-8" });
+        console.log(log);
+      } catch {
+        console.log("(로그 없음)");
+      }
+      break;
+    }
+    case "start": {
+      try {
+        execSync(`launchctl load "${plistPath}"`, { stdio: "inherit" });
+        console.log(`✅ ${BRAND} 시작됨`);
+      } catch {
+        console.error(`❌ 시작 실패 (npx ${CLI_NAME}로 먼저 설치하세요)`);
+      }
+      break;
+    }
+    case "stop": {
+      try {
+        execSync(`launchctl unload "${plistPath}"`, { stdio: "inherit" });
+        console.log(`⏹  ${BRAND} 중지됨`);
+      } catch {
+        console.error("❌ 중지 실패");
+      }
+      break;
+    }
+    case "logs": {
+      spawnSync("tail", ["-f", logPath], { stdio: "inherit" });
+      break;
+    }
+    case "serve": {
+      const serverPath = path.join(pkgDir, "server", "server.js");
+      if (!fileExists(serverPath)) {
+        console.error(`❌ server/server.js 없음 — 재설치 필요: npm install -g ${CLI_NAME}`);
+        process.exit(1);
+      }
+      const port = process.argv[3] || process.env.MERRYNOTE_PORT || process.env.YAPNOTES_PORT || "7373";
+      console.log(`\n🎙️  ${BRAND} dashboard → http://localhost:${port}\n`);
+      const srv = spawn(process.execPath, [serverPath, port], {
+        stdio: "inherit",
+        env: { ...process.env, MERRYNOTE_PORT: port },
+      });
+      srv.on("exit", (code) => process.exit(code ?? 0));
+      break;
+    }
+    case "update": {
+      console.log(`🔄 ${BRAND} 업데이트 중...`);
+      try {
+        execSync(`npm install -g ${CLI_NAME}@latest`, { stdio: "inherit" });
+      } catch {
+        console.log(`⚠️  ${CLI_NAME}@latest 설치 실패 — ${LEGACY_CLI_NAME}@latest로 폴백`);
+        execSync(`npm install -g ${LEGACY_CLI_NAME}@latest`, { stdio: "inherit" });
+      }
+      try {
+        execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: "ignore" });
+      } catch {}
+      try {
+        execSync(`launchctl load "${plistPath}"`, { stdio: "ignore" });
+      } catch {}
+      console.log("✅ 업데이트 완료 & 데몬 재시작됨");
+      break;
+    }
+    default:
+      console.log(`알 수 없는 명령: ${cmd}`);
+      console.log("사용 가능: setup | status | start | stop | logs | serve | update");
   }
 }
 
 async function main() {
+  migrateLegacyState();
+
   console.log("");
-  console.log("🎙️  yapnotes — Just yap, notes write themselves.");
+  console.log(`🎙️  ${BRAND} — Your meeting notes write themselves.`);
   console.log("   말만 하세요. 회의록은 알아서 써집니다.");
   console.log("=================================================");
   console.log("");
 
-  // Check macOS version
   try {
     const osVersion = execSync("sw_vers -productVersion", { encoding: "utf-8" }).trim();
     const major = parseInt(osVersion.split(".")[0], 10);
-    if (major < 26) {
-      console.log(`⚠️  macOS ${osVersion} detected.`);
-      console.log("   Voice Memos transcript requires macOS Tahoe (26) or later.");
-      console.log(`   현재 macOS ${osVersion}입니다. 음성 메모 전사문은 macOS Tahoe (26) 이상이 필요합니다.`);
-      console.log("   Claude Code skill (manual paste) will still work.");
-      console.log("   Claude Code 스킬 (수동 붙여넣기)은 사용할 수 있습니다.");
+    if (major < 14) {
+      console.log(`⚠️  macOS ${osVersion} — macOS 14+ 권장 (현재 버전에서 일부 기능 제한)`);
       console.log("");
     }
-  } catch {
-    // skip version check if sw_vers fails
-  }
+  } catch {}
 
-  // Check Claude CLI
   if (!hasClaude()) {
-    console.log("⚠️  Claude CLI not found.");
-    console.log("   Claude CLI가 설치되어 있지 않습니다.");
+    console.log("⚠️  Claude CLI가 설치되어 있지 않습니다.");
     console.log("   https://docs.anthropic.com/en/docs/claude-code");
     console.log("");
-    const cont = await ask("Continue without Claude CLI? / Claude CLI 없이 계속할까요? (y/N) ");
+    const cont = await ask("Claude CLI 없이 계속할까요? (전사만 가능) (y/N) ");
     if (cont.toLowerCase() !== "y") {
-      console.log("Setup cancelled. / 설치를 취소합니다.");
+      console.log("설치를 취소합니다.");
       rl.close();
       process.exit(0);
     }
   } else {
-    console.log("✅ Claude CLI detected / Claude CLI 감지됨");
+    console.log("✅ Claude CLI 감지됨");
   }
 
-  // Detect Claude CLI path
   let claudePath = "";
   try {
     claudePath = execSync("which claude", { encoding: "utf-8" }).trim();
-  } catch {
-    claudePath = "/usr/local/bin/claude";
-  }
+  } catch {}
 
-  // Step 1: Output directory
-  const defaultOutput = path.join(process.env.HOME, "meeting-notes");
-  const outputDir =
-    (
-      await ask(
-        `\n📁 Output directory for summary files / 요약 파일 저장 경로\n   (${defaultOutput}): `
-      )
-    ).trim() || defaultOutput;
+  const defaultOutput = path.join(HOME, "meeting-notes");
+  const outputDir = (await ask(`\n📁 회의록 저장 경로 (${defaultOutput}): `)).trim() || defaultOutput;
   fs.mkdirSync(outputDir, { recursive: true });
   console.log(`   → ${outputDir}`);
 
-  // Step 2: Install Claude Code Skill
-  console.log("");
-  console.log("📋 Installing Claude Code skill...");
-  console.log("   Claude Code 스킬을 설치합니다...");
-  const pkgDir = path.resolve(__dirname, "..");
+  console.log("\n📋 Claude Code 스킬 설치 중...");
   const skillSrc = path.join(pkgDir, "skills", "meeting-notes", "SKILL.md");
-  const cwd = process.cwd();
-  const skillDest = path.join(cwd, ".claude", "skills", "meeting-notes", "SKILL.md");
+  const skillDest = path.join(process.cwd(), ".claude", "skills", "meeting-notes", "SKILL.md");
   copyFile(skillSrc, skillDest);
   console.log(`   → ${skillDest}`);
-  console.log('   Use "/meeting-notes" in Claude Code.');
-  console.log('   Claude Code에서 "/meeting-notes"로 사용할 수 있습니다.');
 
-  // Step 3: Raycast (optional)
-  let raycastReady = hasRaycast();
-  let installRaycast = false;
+  console.log("");
+  console.log("📲 iPhone AirDrop 자동 처리 설정");
+  console.log("   ~/Downloads/ 폴더를 감시하면 iPhone에서 AirDrop한 오디오 파일이");
+  console.log("   자동으로 전사됩니다. (별도 Shortcuts 앱 설정 불필요)");
+  const watchDl = (await ask("   ~/Downloads/ 감시할까요? (Y/n) ")).trim().toLowerCase();
+  const watchDownloads = watchDl !== "n";
+  console.log(watchDownloads ? "   ✅ Downloads 감시 활성화" : "   ⏭  Downloads 감시 건너뜀");
 
-  if (raycastReady) {
-    console.log("");
-    console.log("✅ Raycast detected / Raycast 감지됨");
-    const ans = await ask(
-      "   Install Raycast script commands? / Raycast 스크립트 커맨드를 설치할까요? (Y/n) "
-    );
-    installRaycast = ans.toLowerCase() !== "n";
-  } else {
-    console.log("");
-    console.log("❌ Raycast not found. / Raycast가 설치되어 있지 않습니다.");
-    const ans = await ask(
-      "   Install Raycast? (Enables voice recording + auto-summarize)\n   Raycast를 설치할까요? (음성 녹음 + 자동 요약 기능 사용 가능) (Y/n) "
-    );
-    if (ans.toLowerCase() !== "n") {
-      raycastReady = installRaycastApp();
-      installRaycast = raycastReady;
-    } else {
-      const skipAns = await ask(
-        "   Skip Raycast and use Claude Code skill only?\n   Raycast 없이 Claude Code 스킬만 사용할까요? (Y/n) "
-      );
-      installRaycast = skipAns.toLowerCase() === "n";
-    }
+  console.log("\n⚙️  백그라운드 데몬 설치 중 (로그인 시 자동 시작)...");
+  try {
+    installLaunchAgent(outputDir, watchDownloads, "");
+    console.log("   ✅ LaunchAgent 설치 완료 — 지금부터 항상 켜져 있습니다!");
+    console.log(`   📂 iCloud ${PRIMARY_INBOX_NAME}/ 감시 중`);
+    console.log(`   ↺ legacy ${LEGACY_INBOX_NAME}/ 도 계속 인식합니다`);
+    if (watchDownloads) console.log("   📂 ~/Downloads/ 감시 중 (AirDrop)");
+  } catch (e) {
+    console.log("   ⚠️  LaunchAgent 설치 실패:", e.message);
+    console.log(`   수동으로 시작: npx ${CLI_NAME} start`);
   }
 
-  if (installRaycast) {
-    const defaultScriptDir = path.join(process.env.HOME, "raycast-scripts");
-    const scriptDir =
-      (
-        await ask(
-          `\n📂 Raycast script directory / Raycast 스크립트 저장 경로\n   (${defaultScriptDir}): `
-        )
-      ).trim() || defaultScriptDir;
-    fs.mkdirSync(scriptDir, { recursive: true });
-
-    // Copy raycast scripts
-    const raycastSrc = path.join(pkgDir, "raycast-scripts");
-    const scripts = fs.readdirSync(raycastSrc);
-    for (const file of scripts) {
-      const src = path.join(raycastSrc, file);
-      const dest = path.join(scriptDir, file);
-
-      if (file.endsWith(".sh")) {
-        let content = fs.readFileSync(src, "utf-8");
-        content = content.replace(
-          /CLAUDE_PATH_PLACEHOLDER/g,
-          claudePath
-        );
-        fs.writeFileSync(dest, content, "utf-8");
-        fs.chmodSync(dest, "755");
-      } else {
-        fs.copyFileSync(src, dest);
+  console.log("");
+  if (hasSwiftBar()) {
+    console.log("✅ SwiftBar 감지됨 — 메뉴바 플러그인 설치할까요? (Y/n) ");
+    const ans = (await ask("")).trim().toLowerCase();
+    if (ans !== "n") installSwiftBar();
+  } else {
+    console.log(`💡 SwiftBar를 설치하면 메뉴바에서 ${BRAND} 상태를 바로 확인할 수 있어요.`);
+    const ans = (await ask("   SwiftBar 설치할까요? (brew 필요) (y/N) ")).trim().toLowerCase();
+    if (ans === "y" && hasBrew()) {
+      try {
+        execSync("brew install --cask swiftbar", { stdio: "inherit" });
+        installSwiftBar();
+      } catch {
+        console.log("   ⚠️  SwiftBar 설치 실패 — 나중에 수동 설치 가능");
       }
     }
-
-    // Create config
-    const configFile = path.join(scriptDir, "meeting-config.json");
-    fs.writeFileSync(
-      configFile,
-      JSON.stringify({ output_dir: outputDir, language: "ko" }, null, 2) + "\n"
-    );
-
-    console.log(`   → Scripts installed to ${scriptDir}/`);
-    console.log(`     스크립트가 ${scriptDir}/ 에 설치되었습니다.`);
-
-    // Open Raycast so user can configure it
-    console.log("");
-    console.log("┌──────────────────────────────────────────────────────────────┐");
-    console.log("│                                                              │");
-    console.log("│  🔧 One more step to connect Raycast + yapnotes             │");
-    console.log("│     Raycast와 yapnotes를 연결하는 마지막 단계입니다         │");
-    console.log("│                                                              │");
-    console.log("│  Raycast will open now. Follow these steps:                  │");
-    console.log("│  Raycast가 열립니다. 아래 단계를 따라주세요:                 │");
-    console.log("│                                                              │");
-    console.log("│  1. Open Raycast Settings                                    │");
-    console.log("│     Raycast 설정을 엽니다 (⌘ + ,)                           │");
-    console.log("│                                                              │");
-    console.log("│  2. Go to \"Extensions\" tab                                   │");
-    console.log("│     \"Extensions\" 탭으로 이동합니다                           │");
-    console.log("│                                                              │");
-    console.log("│  3. Click \"Script Commands\" in the left sidebar              │");
-    console.log("│     왼쪽 사이드바에서 \"Script Commands\"를 클릭합니다         │");
-    console.log("│                                                              │");
-    console.log("│  4. Click \"Add Directories\"                                  │");
-    console.log("│     \"Add Directories\"를 클릭합니다                           │");
-    console.log("│                                                              │");
-    console.log(`│  5. Select: ${scriptDir}`);
-    console.log("│                                                              │");
-    console.log("│  After that, these commands will be available:               │");
-    console.log("│  완료하면 아래 커맨드를 사용할 수 있습니다:                  │");
-    console.log("│                                                              │");
-    console.log("│  🎙️  Record Meeting          — Start recording              │");
-    console.log("│                                 녹음 시작                    │");
-    console.log("│  📝 Finish Record Meeting    — Stop + transcribe + summarize │");
-    console.log("│                                 녹음 종료 + 전사문 추출 + 요약│");
-    console.log("│  📋 Summarize Transcript     — Summarize clipboard text      │");
-    console.log("│                                 클립보드 텍스트 요약         │");
-    console.log("│  ⚙️  Set Meeting Output Path  — Change save location         │");
-    console.log("│                                 저장 경로 변경               │");
-    console.log("│                                                              │");
-    console.log("└──────────────────────────────────────────────────────────────┘");
-
-    try {
-      execSync("open -a Raycast", { stdio: "ignore" });
-    } catch {
-      // Raycast may not be ready yet after fresh install
-    }
-
-    await ask(
-      "\nPress Enter after you've added the script directory in Raycast...\nRaycast에서 스크립트 디렉토리를 추가한 후 Enter를 눌러주세요... "
-    );
-    console.log("   👍 Great! / 좋습니다!");
   }
 
-  // Step 4: macOS accessibility reminder
+  if (hasRaycast()) {
+    console.log("");
+    console.log("✅ Raycast 감지됨");
+    const ans = (await ask("   Raycast 스크립트 커맨드 설치할까요? (Y/n) ")).trim().toLowerCase();
+    if (ans !== "n") installRaycast(claudePath, outputDir);
+  }
+
   console.log("");
   console.log("┌──────────────────────────────────────────────────────────────┐");
+  console.log("│  ⚙️  macOS 권한 필요                                          │");
   console.log("│                                                              │");
-  console.log("│  ⚙️  macOS Accessibility Permission Required                 │");
-  console.log("│     macOS 손쉬운 사용 권한이 필요합니다                      │");
-  console.log("│                                                              │");
-  console.log("│  Voice Memos automation needs accessibility access.          │");
-  console.log("│  음성 메모 자동화를 위해 접근성 권한이 필요합니다.           │");
-  console.log("│                                                              │");
-  console.log("│  1. Open System Settings                                     │");
-  console.log("│     시스템 설정을 엽니다                                     │");
-  console.log("│                                                              │");
-  console.log("│  2. Privacy & Security → Accessibility                       │");
-  console.log("│     개인정보 보호 및 보안 → 손쉬운 사용                      │");
-  console.log("│                                                              │");
-  if (installRaycast) {
-    console.log("│  3. Toggle ON: Raycast                                       │");
-    console.log("│     Raycast를 켜주세요                                       │");
-    console.log("│                                                              │");
-    console.log("│  4. Toggle ON: your terminal app (Terminal / iTerm2)         │");
-    console.log("│     터미널 앱을 켜주세요 (Terminal / iTerm2)                 │");
-  } else {
-    console.log("│  3. Toggle ON: your terminal app (Terminal / iTerm2)         │");
-    console.log("│     터미널 앱을 켜주세요 (Terminal / iTerm2)                 │");
-  }
-  console.log("│                                                              │");
-  console.log("│  Without this, yapnotes cannot control Voice Memos.          │");
-  console.log("│  이 권한이 없으면 음성 메모를 제어할 수 없습니다.            │");
-  console.log("│                                                              │");
+  console.log("│  시스템 설정 > 개인정보 보호 > 음성 인식 → 켜기             │");
+  console.log("│  시스템 설정 > 개인정보 보호 > 마이크 → 터미널 앱 켜기      │");
   console.log("└──────────────────────────────────────────────────────────────┘");
 
   console.log("");
   console.log("==========================================================");
-  console.log("  ✅ yapnotes is ready! / yapnotes 설치 완료!");
+  console.log(`  ✅ ${BRAND} 설치 완료!`);
   console.log("==========================================================");
   console.log("");
-  console.log("  📋 Claude Code (paste any transcript / 전사문 직접 붙여넣기):");
-  console.log('     /meeting-notes [title] [transcript text]');
+  console.log("  📲 iPhone → Mac 전송 방법:");
+  console.log("     AirDrop:  음성메모 → 공유 → AirDrop → Mac (자동 처리 ✅)");
+  console.log(`     iCloud:   ~/iCloud Drive/${PRIMARY_INBOX_NAME}/ 에 파일 저장 (자동 처리 ✅)`);
   console.log("");
-  if (installRaycast) {
-    console.log("  🎙️  Raycast (full automation / 전체 자동화):");
-    console.log('     1. "Record Meeting"         → Start recording / 녹음 시작');
-    console.log("     2. Have your meeting...      회의를 진행하세요...");
-    console.log('     3. "Finish Record Meeting"   → Auto-summarize / 자동 요약');
-    console.log("");
-    console.log("  📋 Raycast (clipboard / 클립보드):");
-    console.log('     Copy text → "Summarize Transcript" → Done!');
-    console.log("     텍스트 복사 → \"Summarize Transcript\" 실행 → 끝!");
-    console.log("");
+  console.log("  🖥  Mac에서 바로 녹음:");
+  if (hasRaycast()) {
+    console.log('     Raycast → "Record Meeting" → 회의 → "Finish Record Meeting"');
   }
-  console.log(`  📁 Summaries saved to / 요약 저장 위치: ${outputDir}`);
   console.log("");
-  console.log("  Happy yapping! 🎉");
+  console.log("  ⌨️  Claude Code 스킬:");
+  console.log("     /meeting-notes [제목] [전사문 붙여넣기]");
+  console.log("");
+  console.log("  🔧 관리:");
+  console.log(`     npx ${CLI_NAME} serve    — 웹 대시보드 열기 (http://localhost:7373)`);
+  console.log(`     npx ${CLI_NAME} status   — 상태 확인`);
+  console.log(`     npx ${CLI_NAME} logs     — 로그 보기`);
+  console.log(`     npx ${CLI_NAME} stop     — 중지`);
+  console.log(`     npx ${CLI_NAME} update   — 업데이트`);
+  console.log("");
+  console.log(`  📁 회의록 저장 위치: ${outputDir}`);
+  console.log("");
+  console.log("  Happy noting! 🎉");
   console.log("");
 
   rl.close();
+}
+
+const command = process.argv[2];
+if (command && command !== "setup") {
+  handleCommand(command);
+  process.exit(0);
 }
 
 main().catch((err) => {

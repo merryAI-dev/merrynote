@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────
 # watch-inbox.sh
-# iCloud yapnotes-inbox 폴더를 감시하다가 새 오디오 파일이
+# iCloud merrynote-inbox 폴더를 감시하다가 새 오디오 파일이
 # 들어오면 자동으로 MYSC vocab 주입 전사 → 회의록 생성
 #
 # Usage:
@@ -12,15 +12,16 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-YAPNOTES_ROOT="$(dirname "$SCRIPT_DIR")"
+MERRYNOTE_ROOT="$(dirname "$SCRIPT_DIR")"
 
 # ── iCloud inbox 경로 ─────────────────────────────────────
 ICLOUD_BASE="$HOME/Library/Mobile Documents/com~apple~CloudDocs"
-INBOX_DIR="$ICLOUD_BASE/yapnotes-inbox"
-DONE_DIR="$INBOX_DIR/.done"
+PRIMARY_INBOX_DIR="$ICLOUD_BASE/merrynote-inbox"
+LEGACY_INBOX_DIR="$ICLOUD_BASE/yapnotes-inbox"
 NOTES_DIR="$HOME/meeting-notes"
 
-mkdir -p "$INBOX_DIR" "$DONE_DIR" "$NOTES_DIR"
+mkdir -p "$PRIMARY_INBOX_DIR" "$LEGACY_INBOX_DIR" "$NOTES_DIR"
+WATCH_DIRS=("$PRIMARY_INBOX_DIR" "$LEGACY_INBOX_DIR")
 
 SUPPORTED_EXT="m4a mp3 wav aiff aac mp4 mov"
 
@@ -38,9 +39,9 @@ process_file() {
 
     # 전사 실행
     local TRANSCRIPT
-    if ! TRANSCRIPT=$(swift "$SCRIPT_DIR/transcribe.swift" "$FILE" 2>/tmp/yapnotes-watch-err.txt); then
+    if ! TRANSCRIPT=$(swift "$SCRIPT_DIR/transcribe.swift" "$FILE" 2>/tmp/merrynote-watch-err.txt); then
         log "❌ 전사 실패:"
-        cat /tmp/yapnotes-watch-err.txt
+        cat /tmp/merrynote-watch-err.txt
         return 1
     fi
 
@@ -58,7 +59,7 @@ process_file() {
 
     if [ -n "$CLAUDE_PATH" ]; then
         log "📝 Claude로 회의록 생성 중..."
-        local PROMPT_TEMPLATE="$YAPNOTES_ROOT/prompts/summarize.md"
+        local PROMPT_TEMPLATE="$MERRYNOTE_ROOT/prompts/summarize.md"
         local SUMMARY=""
 
         if [ -f "$PROMPT_TEMPLATE" ]; then
@@ -67,7 +68,7 @@ process_file() {
             PROMPT="${PROMPT//\{\{TITLE\}\}/$TITLE}"
             PROMPT="${PROMPT//\{\{DATE\}\}/$TODAY}"
             local VOCAB
-            VOCAB=$(cat "$YAPNOTES_ROOT/vocab/names.md" "$YAPNOTES_ROOT/vocab/glossary.md" 2>/dev/null || true)
+            VOCAB=$(cat "$MERRYNOTE_ROOT/vocab/names.md" "$MERRYNOTE_ROOT/vocab/glossary.md" 2>/dev/null || true)
             SUMMARY=$(printf '%s\n\n## MYSC 어휘\n%s\n\n---\n\n전사문:\n%s' "$PROMPT" "$VOCAB" "$TRANSCRIPT" \
                 | "$CLAUDE_PATH" -p --dangerously-skip-permissions 2>/dev/null || true)
         else
@@ -88,11 +89,15 @@ process_file() {
     fi
 
     # 처리 완료 파일 → .done 이동
+    local FILE_DIR
+    FILE_DIR="$(dirname "$FILE")"
+    local DONE_DIR="$FILE_DIR/.done"
+    mkdir -p "$DONE_DIR"
     mv "$FILE" "$DONE_DIR/$BASENAME"
     log "✔  $BASENAME → .done 이동"
 
     # macOS 알림
-    osascript -e "display notification \"$BASENAME 전사 완료 ✅\" with title \"yapnotes\" subtitle \"$OUTPUT_FILE\"" 2>/dev/null || true
+    osascript -e "display notification \"$BASENAME 전사 완료 ✅\" with title \"MerryNote\" subtitle \"$OUTPUT_FILE\"" 2>/dev/null || true
 }
 
 process_all_pending() {
@@ -101,20 +106,20 @@ process_all_pending() {
         while IFS= read -r -d '' FILE; do
             FOUND=1
             process_file "$FILE" || log "⚠️  처리 실패: $FILE"
-        done < <(find "$INBOX_DIR" -maxdepth 1 -iname "*.$EXT" -print0 2>/dev/null)
+        done < <(find "${WATCH_DIRS[@]}" -maxdepth 1 -iname "*.$EXT" -print0 2>/dev/null)
     done
     [ "$FOUND" -eq 0 ] && log "📭 처리할 파일 없음"
 }
 
 # ── --once 모드 ───────────────────────────────────────────
 if [[ "${1:-}" == "--once" ]]; then
-    log "🔍 inbox 스캔 (one-shot): $INBOX_DIR"
+    log "🔍 inbox 스캔 (one-shot): ${WATCH_DIRS[*]}"
     process_all_pending
     exit 0
 fi
 
 # ── 상시 감시 모드 ────────────────────────────────────────
-log "👀 inbox 감시 시작: $INBOX_DIR"
+log "👀 inbox 감시 시작: ${WATCH_DIRS[*]}"
 log "   중지하려면 Ctrl+C"
 echo ""
 
@@ -123,7 +128,7 @@ process_all_pending
 
 # fswatch로 실시간 감시 (없으면 폴링 fallback)
 if command -v fswatch &>/dev/null; then
-    fswatch -0 --event Created --event Renamed "$INBOX_DIR" \
+    fswatch -0 --event Created --event Renamed "${WATCH_DIRS[@]}" \
     | while IFS= read -r -d '' CHANGED_FILE; do
         EXT="${CHANGED_FILE##*.}"
         EXT_LOWER=$(echo "$EXT" | tr '[:upper:]' '[:lower:]')

@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MerryNote</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Plus+Jakarta+Sans:ital,wght@0,300;0,400;0,500;0,600;1,300&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+:root {
+  --bg:       #07090b;
+  --bg2:      #0c1117;
+  --bg3:      #111820;
+  --bg4:      #162030;
+  --border:   #1a2635;
+  --border2:  #243446;
+  --amber:    #f0a020;
+  --amber-d:  #b87318;
+  --amber-bg: rgba(240,160,32,.08);
+  --amber-gl: rgba(240,160,32,.2);
+  --teal:     #2dd4bf;
+  --teal-bg:  rgba(45,212,191,.08);
+  --green:    #4ade80;
+  --red:      #f87171;
+  --yellow:   #fbbf24;
+  --text:     #d8e8e2;
+  --text2:    #7a9e98;
+  --text3:    #3d5f5a;
+  --sw:       228px;
+  --ff:       'Plus Jakarta Sans', sans-serif;
+  --fm:       'JetBrains Mono', monospace;
+  --fd:       'Syne', sans-serif;
+  --r:        10px;
+  --r2:       6px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%; background: var(--bg);
+  color: var(--text); font-family: var(--ff);
+  font-size: 14px; line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+/* grain overlay */
+body::after {
+  content: '';
+  position: fixed; inset: 0; pointer-events: none; z-index: 9999;
+  opacity: .035;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px;
+}
+
+/* ── Layout ── */
+.app { display: flex; height: 100vh; }
+
+/* ── Sidebar ── */
+.sidebar {
+  width: var(--sw); flex-shrink: 0;
+  background: var(--bg2);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  padding: 0 0 16px;
+  position: relative;
+  overflow: hidden;
+}
+.sidebar::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0; height: 1px;
+  background: linear-gradient(90deg, transparent, var(--amber-gl), transparent);
+}
+
+.brand {
+  padding: 24px 20px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; gap: 10px;
+}
+.brand-icon {
+  width: 32px; height: 32px;
+  background: var(--amber-bg);
+  border: 1px solid var(--amber-d);
+  border-radius: 8px;
+  display: grid; place-items: center;
+  font-size: 15px;
+  position: relative;
+}
+.brand-icon::after {
+  content: '';
+  position: absolute; inset: -1px;
+  border-radius: 8px;
+  box-shadow: 0 0 12px var(--amber-gl);
+  pointer-events: none;
+}
+.brand-text {
+  font-family: var(--fd); font-weight: 700; font-size: 16px;
+  letter-spacing: -.3px; color: var(--text);
+}
+.brand-sub { font-size: 10px; color: var(--text3); font-family: var(--fm); margin-top: 1px; }
+
+.nav { flex: 1; padding: 12px 8px; display: flex; flex-direction: column; gap: 2px; }
+
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 12px; border-radius: var(--r2);
+  cursor: pointer; user-select: none;
+  color: var(--text2); font-size: 13px; font-weight: 500;
+  transition: all .15s;
+  position: relative; overflow: hidden;
+  border: 1px solid transparent;
+}
+.nav-item:hover { background: var(--bg3); color: var(--text); }
+.nav-item.active {
+  background: var(--amber-bg);
+  color: var(--amber);
+  border-color: rgba(240,160,32,.15);
+}
+.nav-item.active::before {
+  content: '';
+  position: absolute; left: 0; top: 20%; bottom: 20%;
+  width: 2px; background: var(--amber);
+  border-radius: 0 2px 2px 0;
+  box-shadow: 0 0 8px var(--amber-gl);
+}
+.nav-icon { font-size: 15px; width: 18px; text-align: center; }
+.nav-badge {
+  margin-left: auto; background: var(--amber-bg); color: var(--amber);
+  font-family: var(--fm); font-size: 10px; padding: 1px 6px;
+  border-radius: 20px; font-weight: 500;
+  border: 1px solid rgba(240,160,32,.2);
+}
+
+.sidebar-status {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex; align-items: center; gap: 8px;
+}
+.status-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text3);
+  transition: background .3s, box-shadow .3s;
+  flex-shrink: 0;
+}
+.status-dot.running {
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+  animation: pulse-dot 2s infinite;
+}
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; } 50% { opacity: .5; }
+}
+.status-label { font-size: 11px; color: var(--text3); font-family: var(--fm); }
+.status-label.running { color: var(--green); }
+
+/* ── Main ── */
+.main {
+  flex: 1; overflow: hidden;
+  display: flex; flex-direction: column;
+}
+
+.section {
+  display: none; flex: 1;
+  overflow-y: auto;
+  padding: 32px 36px;
+  height: 100%;
+}
+.section.active { display: flex; flex-direction: column; }
+
+/* ── Section header ── */
+.sec-head {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  margin-bottom: 28px;
+}
+.sec-title {
+  font-family: var(--fd); font-size: 26px; font-weight: 700;
+  letter-spacing: -.5px; color: var(--text);
+  line-height: 1;
+}
+.sec-sub { font-size: 12px; color: var(--text3); margin-top: 5px; font-family: var(--fm); }
+
+/* ── Cards ── */
+.card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.card-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.card-title { font-size: 12px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .8px; }
+.card-body { padding: 18px; }
+
+/* ── Buttons ── */
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px; border-radius: var(--r2);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+  border: 1px solid transparent; transition: all .15s;
+  font-family: var(--ff);
+}
+.btn-amber {
+  background: var(--amber-bg); color: var(--amber);
+  border-color: rgba(240,160,32,.25);
+}
+.btn-amber:hover { background: rgba(240,160,32,.15); border-color: var(--amber-d); box-shadow: 0 0 12px var(--amber-gl); }
+.btn-ghost { background: transparent; color: var(--text2); border-color: var(--border); }
+.btn-ghost:hover { background: var(--bg3); color: var(--text); }
+.btn-danger { background: rgba(248,113,113,.08); color: var(--red); border-color: rgba(248,113,113,.2); }
+.btn-danger:hover { background: rgba(248,113,113,.15); }
+
+/* ── Dashboard ── */
+#dash .grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr 340px;
+  grid-template-rows: auto 1fr;
+  gap: 16px;
+  flex: 1;
+  min-height: 0;
+}
+.stat-row { grid-column: 1 / 3; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+
+.stat-card {
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r); padding: 18px 20px;
+  transition: border-color .2s;
+}
+.stat-card:hover { border-color: var(--border2); }
+.stat-val {
+  font-family: var(--fd); font-size: 32px; font-weight: 700;
+  color: var(--text); line-height: 1; margin-bottom: 4px;
+}
+.stat-val.amber { color: var(--amber); }
+.stat-lbl { font-size: 11px; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: .6px; }
+
+.recent-card { grid-column: 1; display: flex; flex-direction: column; }
+.processing-card { grid-column: 2; display: flex; flex-direction: column; }
+.log-card { grid-column: 3; grid-row: 1 / 3; display: flex; flex-direction: column; }
+
+/* ── Note list items ── */
+.note-item {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 12px 18px; cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  transition: background .12s;
+}
+.note-item:last-child { border-bottom: none; }
+.note-item:hover { background: var(--bg3); }
+.note-item.active { background: var(--amber-bg); }
+.note-date {
+  font-family: var(--fm); font-size: 10px; color: var(--text3);
+  margin-top: 2px; white-space: nowrap; flex-shrink: 0;
+}
+.note-title { font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.3; }
+.note-meta {
+  margin-top: 3px; font-size: 11px; color: var(--text3);
+  font-family: var(--fm); display: flex; gap: 10px;
+}
+.note-words { }
+
+/* ── Log feed ── */
+.log-feed {
+  flex: 1; overflow-y: auto; padding: 12px;
+  font-family: var(--fm); font-size: 11px;
+  line-height: 1.7;
+  display: flex; flex-direction: column;
+  gap: 0;
+  scrollbar-width: thin; scrollbar-color: var(--border2) transparent;
+}
+.log-line {
+  padding: 1px 0;
+  color: var(--text3);
+  animation: fade-in-up .2s ease;
+}
+.log-line.info  { color: var(--text2); }
+.log-line.ok    { color: var(--green); }
+.log-line.err   { color: var(--red); }
+.log-line.warn  { color: var(--yellow); }
+.log-line.start { color: var(--amber); }
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Notes section ── */
+#notes .split { display: flex; flex: 1; gap: 16px; min-height: 0; }
+#notes .notes-list {
+  width: 300px; flex-shrink: 0;
+  background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r); display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.search-wrap {
+  padding: 12px; border-bottom: 1px solid var(--border);
+}
+.search-input {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border2);
+  color: var(--text); padding: 8px 12px; border-radius: var(--r2);
+  font-family: var(--fm); font-size: 12px; outline: none;
+  transition: border-color .15s;
+}
+.search-input:focus { border-color: var(--amber-d); }
+.search-input::placeholder { color: var(--text3); }
+
+.notes-list-body { flex: 1; overflow-y: auto; }
+
+#notes .note-viewer {
+  flex: 1; background: var(--bg2); border: 1px solid var(--border);
+  border-radius: var(--r); display: flex; flex-direction: column;
+  overflow: hidden; min-width: 0;
+}
+.viewer-toolbar {
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.viewer-title { font-size: 13px; font-weight: 600; color: var(--text2); }
+.viewer-body {
+  flex: 1; overflow-y: auto; padding: 28px 32px;
+}
+.viewer-empty {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  color: var(--text3); gap: 8px;
+}
+.viewer-empty-icon { font-size: 36px; opacity: .4; }
+.viewer-empty-text { font-size: 13px; font-family: var(--fm); }
+
+/* markdown styles */
+.md h1 { font-family: var(--fd); font-size: 22px; font-weight: 700; color: var(--text); margin: 0 0 16px; letter-spacing: -.4px; }
+.md h2 { font-size: 15px; font-weight: 600; color: var(--text); margin: 24px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.md h3 { font-size: 13px; font-weight: 600; color: var(--text2); margin: 16px 0 8px; }
+.md p  { color: var(--text2); margin-bottom: 10px; font-size: 13.5px; line-height: 1.7; }
+.md li { color: var(--text2); margin-bottom: 4px; font-size: 13.5px; }
+.md ul, .md ol { padding-left: 20px; margin-bottom: 10px; }
+.md blockquote { border-left: 2px solid var(--amber-d); padding-left: 14px; color: var(--text3); font-style: italic; margin: 12px 0; }
+.md code { font-family: var(--fm); background: var(--bg3); padding: 2px 6px; border-radius: 4px; font-size: 12px; color: var(--amber); }
+.md pre { background: var(--bg3); border: 1px solid var(--border); border-radius: var(--r2); padding: 14px; margin-bottom: 12px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; color: var(--teal); font-size: 12px; }
+.md strong { color: var(--text); font-weight: 600; }
+.md table { width: 100%; border-collapse: collapse; margin-bottom: 14px; font-size: 13px; }
+.md th { background: var(--bg3); padding: 8px 12px; text-align: left; font-weight: 600; color: var(--text2); border: 1px solid var(--border); }
+.md td { padding: 7px 12px; border: 1px solid var(--border); color: var(--text2); }
+.md hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+.md input[type="checkbox"] { margin-right: 6px; }
+
+/* ── Record section ── */
+#record .rec-layout {
+  flex: 1; display: flex; gap: 24px; min-height: 0;
+}
+#record .rec-main {
+  flex: 1; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 32px; min-height: 400px;
+}
+
+.rec-btn-wrap {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  width: 200px; height: 200px;
+}
+.rec-ring {
+  position: absolute; border-radius: 50%;
+  border: 1px solid var(--amber-gl); opacity: 0;
+}
+.rec-ring-1 { width: 160px; height: 160px; }
+.rec-ring-2 { width: 190px; height: 190px; }
+.rec-ring-3 { width: 220px; height: 220px; }
+
+.recording .rec-ring { animation: ring-pulse 2.5s ease-out infinite; }
+.recording .rec-ring-1 { animation-delay: 0s; }
+.recording .rec-ring-2 { animation-delay: .4s; }
+.recording .rec-ring-3 { animation-delay: .8s; }
+@keyframes ring-pulse {
+  0%   { opacity: 0; transform: scale(.9); }
+  40%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.15); }
+}
+
+.rec-btn {
+  width: 130px; height: 130px; border-radius: 50%;
+  background: var(--bg3);
+  border: 2px solid var(--border2);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  cursor: pointer; transition: all .2s; z-index: 1;
+  gap: 6px; user-select: none;
+}
+.rec-btn:hover { border-color: var(--amber-d); box-shadow: 0 0 28px var(--amber-gl); }
+.rec-btn.recording {
+  background: var(--amber-bg);
+  border-color: var(--amber);
+  box-shadow: 0 0 40px var(--amber-gl), 0 0 80px rgba(240,160,32,.1);
+}
+.rec-btn-icon { font-size: 32px; }
+.rec-btn-label { font-family: var(--fm); font-size: 10px; color: var(--text3); text-transform: uppercase; letter-spacing: 1px; }
+.rec-btn.recording .rec-btn-label { color: var(--amber); }
+
+.rec-timer {
+  font-family: var(--fd); font-size: 42px; font-weight: 700;
+  color: var(--text3); letter-spacing: -.5px; min-width: 120px; text-align: center;
+  transition: color .3s;
+}
+.rec-timer.active { color: var(--amber); }
+
+.rec-state-label {
+  font-family: var(--fm); font-size: 12px; color: var(--text3); letter-spacing: .5px;
+  text-transform: uppercase; min-height: 18px;
+}
+
+/* Stop form */
+.stop-form {
+  display: none; flex-direction: column; align-items: center; gap: 12px; width: 100%; max-width: 380px;
+}
+.stop-form.show { display: flex; }
+.stop-input {
+  width: 100%; background: var(--bg3); border: 1px solid var(--border2);
+  color: var(--text); padding: 11px 16px; border-radius: var(--r);
+  font-family: var(--ff); font-size: 14px; outline: none; text-align: center;
+  transition: border-color .15s;
+}
+.stop-input:focus { border-color: var(--amber-d); }
+.stop-input::placeholder { color: var(--text3); }
+
+#record .rec-side {
+  width: 320px; flex-shrink: 0;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+.process-drop {
+  border: 1.5px dashed var(--border2);
+  border-radius: var(--r); padding: 28px 20px;
+  text-align: center; cursor: pointer;
+  transition: all .2s; background: var(--bg2);
+}
+.process-drop:hover, .process-drop.over {
+  border-color: var(--amber-d); background: var(--amber-bg);
+}
+.process-drop-icon { font-size: 28px; margin-bottom: 8px; }
+.process-drop-text { font-size: 13px; color: var(--text2); }
+.process-drop-sub { font-size: 11px; color: var(--text3); margin-top: 4px; font-family: var(--fm); }
+
+.file-input-row { display: flex; gap: 8px; }
+.file-input {
+  flex: 1; background: var(--bg3); border: 1px solid var(--border2);
+  color: var(--text); padding: 8px 12px; border-radius: var(--r2);
+  font-family: var(--fm); font-size: 11px; outline: none;
+  transition: border-color .15s;
+}
+.file-input:focus { border-color: var(--amber-d); }
+.file-input::placeholder { color: var(--text3); }
+
+/* ── Vocab section ── */
+#vocab .vocab-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; flex: 1; min-height: 0; }
+.vocab-editor {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.vocab-toolbar {
+  padding: 10px 16px; border-bottom: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.vocab-textarea {
+  flex: 1; background: transparent; border: none; outline: none; resize: none;
+  color: var(--text); font-family: var(--fm); font-size: 12px; line-height: 1.7;
+  padding: 16px; overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: var(--border2) transparent;
+}
+.vocab-names {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.names-table-wrap { flex: 1; overflow-y: auto; }
+.names-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.names-table th {
+  background: var(--bg3); padding: 9px 16px; text-align: left;
+  font-size: 11px; color: var(--text3); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .5px;
+  border-bottom: 1px solid var(--border); position: sticky; top: 0;
+}
+.names-table td { padding: 7px 16px; border-bottom: 1px solid var(--border); color: var(--text2); }
+.names-table tr:hover td { background: var(--bg3); }
+.names-table td:first-child { color: var(--text); font-weight: 500; }
+
+/* ── Stats section ── */
+#stats .stats-top { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+
+.big-stat {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
+  padding: 22px 24px;
+}
+.big-stat-val { font-family: var(--fd); font-size: 44px; font-weight: 800; color: var(--text); letter-spacing: -2px; line-height: 1; }
+.big-stat-val.amber { color: var(--amber); }
+.big-stat-lbl { font-size: 11px; color: var(--text3); text-transform: uppercase; letter-spacing: .7px; margin-top: 6px; }
+
+#stats .stats-bottom { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; flex: 1; min-height: 0; }
+
+.chart-card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r); }
+.chart-body { padding: 20px; display: flex; align-items: flex-end; gap: 6px; height: 220px; }
+.bar-wrap { display: flex; flex-direction: column; align-items: center; gap: 5px; flex: 1; }
+.bar {
+  width: 100%; background: var(--bg3); border-radius: 3px;
+  border: 1px solid var(--border2);
+  transition: height .6s cubic-bezier(.4,0,.2,1), background .3s;
+  min-height: 2px;
+  position: relative;
+}
+.bar.current {
+  background: var(--amber-bg);
+  border-color: rgba(240,160,32,.3);
+  box-shadow: 0 0 8px var(--amber-gl);
+}
+.bar.current::after {
+  content: attr(data-val);
+  position: absolute; top: -18px; left: 50%; transform: translateX(-50%);
+  font-family: var(--fm); font-size: 10px; color: var(--amber);
+  white-space: nowrap;
+}
+.bar-lbl { font-family: var(--fm); font-size: 9px; color: var(--text3); writing-mode: horizontal-tb; }
+
+.recent-activity { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r); display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Toast ── */
+.toast-wrap { position: fixed; top: 20px; right: 20px; display: flex; flex-direction: column; gap: 8px; z-index: 10000; }
+.toast {
+  padding: 10px 16px; border-radius: var(--r2);
+  font-size: 12px; font-family: var(--fm);
+  background: var(--bg3); border: 1px solid var(--border2); color: var(--text2);
+  animation: toast-in .2s ease; box-shadow: 0 4px 20px rgba(0,0,0,.4);
+  max-width: 280px;
+}
+.toast.ok  { color: var(--green); border-color: rgba(74,222,128,.2); background: rgba(74,222,128,.05); }
+.toast.err { color: var(--red);   border-color: rgba(248,113,113,.2); background: rgba(248,113,113,.05); }
+@keyframes toast-in { from { opacity:0; transform: translateX(16px); } to { opacity:1; transform: none; } }
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+/* ── Empty state ── */
+.empty { display: flex; flex-direction: column; align-items: center; justify-content: center; flex: 1; gap: 8px; color: var(--text3); }
+.empty-icon { font-size: 32px; opacity: .35; }
+.empty-text { font-size: 12px; font-family: var(--fm); }
+
+/* divider */
+.divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+/* tag */
+.tag {
+  display: inline-flex; align-items: center;
+  padding: 2px 8px; border-radius: 20px;
+  font-size: 10px; font-family: var(--fm); font-weight: 500;
+}
+.tag-amber { background: var(--amber-bg); color: var(--amber); border: 1px solid rgba(240,160,32,.2); }
+.tag-teal  { background: var(--teal-bg);  color: var(--teal);  border: 1px solid rgba(45,212,191,.2); }
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ── Sidebar ── -->
+<aside class="sidebar">
+  <div class="brand">
+    <div class="brand-icon">🎙️</div>
+    <div>
+      <div class="brand-text">MerryNote</div>
+      <div class="brand-sub">v1.0 · local</div>
+    </div>
+  </div>
+
+  <nav class="nav">
+    <div class="nav-item active" data-sec="dash">
+      <span class="nav-icon">⬡</span>대시보드
+      <span class="nav-badge" id="badge-notes">0</span>
+    </div>
+    <div class="nav-item" data-sec="notes">
+      <span class="nav-icon">◈</span>회의록
+    </div>
+    <div class="nav-item" data-sec="record">
+      <span class="nav-icon">◉</span>녹음
+    </div>
+    <div class="nav-item" data-sec="vocab">
+      <span class="nav-icon">◫</span>어휘 사전
+    </div>
+    <div class="nav-item" data-sec="stats">
+      <span class="nav-icon">◰</span>통계
+    </div>
+  </nav>
+
+  <div class="sidebar-status">
+    <div class="status-dot" id="status-dot"></div>
+    <span class="status-label" id="status-label">연결 중...</span>
+  </div>
+</aside>
+
+<!-- ── Main ── -->
+<div class="main">
+
+  <!-- Dashboard -->
+  <section class="section active" id="dash">
+    <div class="sec-head">
+      <div>
+        <div class="sec-title">대시보드</div>
+        <div class="sec-sub" id="dash-time"></div>
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn btn-ghost" id="btn-daemon-start" onclick="daemonStart()" style="display:none">▶ 시작</button>
+        <button class="btn btn-ghost" id="btn-daemon-stop"  onclick="daemonStop()"  style="display:none">⏹ 중지</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="stat-row">
+        <div class="stat-card">
+          <div class="stat-val amber" id="stat-total">—</div>
+          <div class="stat-lbl">전체 회의록</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" id="stat-month">—</div>
+          <div class="stat-lbl">이번 달</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" id="stat-words">—</div>
+          <div class="stat-lbl">총 단어 수</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" id="stat-watching">—</div>
+          <div class="stat-lbl">감시 폴더</div>
+        </div>
+      </div>
+
+      <!-- Recent notes -->
+      <div class="card recent-card">
+        <div class="card-head">
+          <span class="card-title">최근 회의록</span>
+          <button class="btn btn-ghost" onclick="nav('notes')" style="padding:4px 10px;font-size:11px">전체 보기</button>
+        </div>
+        <div id="dash-notes" style="flex:1;overflow-y:auto"></div>
+      </div>
+
+      <!-- Watching folders -->
+      <div class="card processing-card">
+        <div class="card-head"><span class="card-title">감시 폴더</span></div>
+        <div class="card-body" style="display:flex;flex-direction:column;gap:8px" id="dash-folders"></div>
+      </div>
+
+      <!-- Live log -->
+      <div class="card log-card">
+        <div class="card-head">
+          <span class="card-title">라이브 로그</span>
+          <span class="tag tag-teal" id="log-status">연결 중</span>
+        </div>
+        <div class="log-feed" id="log-feed"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Notes -->
+  <section class="section" id="notes">
+    <div class="sec-head">
+      <div>
+        <div class="sec-title">회의록</div>
+        <div class="sec-sub" id="notes-count">로딩 중...</div>
+      </div>
+    </div>
+    <div class="split">
+      <div class="notes-list">
+        <div class="search-wrap">
+          <input class="search-input" id="search-input" placeholder="🔍  검색..." oninput="onSearch(this.value)">
+        </div>
+        <div class="notes-list-body" id="notes-list-body"></div>
+      </div>
+      <div class="note-viewer" id="note-viewer">
+        <div class="viewer-empty">
+          <div class="viewer-empty-icon">◈</div>
+          <div class="viewer-empty-text">회의록을 선택하세요</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Record -->
+  <section class="section" id="record">
+    <div class="sec-head">
+      <div>
+        <div class="sec-title">녹음</div>
+        <div class="sec-sub">Voice Memos + MYSC vocab 주입 전사</div>
+      </div>
+    </div>
+    <div class="rec-layout">
+      <!-- Main record area -->
+      <div class="rec-main">
+        <div class="rec-btn-wrap" id="rec-wrap">
+          <div class="rec-ring rec-ring-1"></div>
+          <div class="rec-ring rec-ring-2"></div>
+          <div class="rec-ring rec-ring-3"></div>
+          <div class="rec-btn" id="rec-btn" onclick="toggleRecord()">
+            <div class="rec-btn-icon" id="rec-icon">🎙️</div>
+            <div class="rec-btn-label" id="rec-label">녹음 시작</div>
+          </div>
+        </div>
+
+        <div class="rec-timer" id="rec-timer">00:00</div>
+        <div class="rec-state-label" id="rec-state">클릭하여 녹음 시작</div>
+
+        <div class="stop-form" id="stop-form">
+          <input class="stop-input" id="stop-title" placeholder="회의 제목을 입력하세요">
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-amber" onclick="finishRecord()">완료 & 전사 시작</button>
+            <button class="btn btn-ghost" onclick="cancelStop()">취소</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Side: process file -->
+      <div class="rec-side">
+        <div class="card">
+          <div class="card-head"><span class="card-title">기존 파일 전사</span></div>
+          <div class="card-body" style="display:flex;flex-direction:column;gap:12px">
+            <div class="process-drop" id="process-drop" onclick="document.getElementById('hidden-file').click()">
+              <div class="process-drop-icon">📁</div>
+              <div class="process-drop-text">파일 경로 붙여넣기</div>
+              <div class="process-drop-sub">m4a · mp3 · wav · aiff</div>
+            </div>
+            <input type="file" id="hidden-file" accept="audio/*" style="display:none" onchange="onFileSelect(this)">
+            <div class="file-input-row">
+              <input class="file-input" id="file-path-input" placeholder="/path/to/recording.m4a">
+              <button class="btn btn-amber" onclick="transcribeFile()">전사</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="flex:1">
+          <div class="card-head"><span class="card-title">처리 로그</span></div>
+          <div class="log-feed" id="rec-log" style="height:200px;max-height:200px"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Vocab -->
+  <section class="section" id="vocab">
+    <div class="sec-head">
+      <div>
+        <div class="sec-title">어휘 사전</div>
+        <div class="sec-sub">Apple 음성 인식기에 자동 주입됨</div>
+      </div>
+      <button class="btn btn-amber" onclick="saveVocab()">저장</button>
+    </div>
+    <div class="vocab-grid">
+      <div class="vocab-editor">
+        <div class="vocab-toolbar">
+          <span class="card-title">glossary.md</span>
+          <span class="tag tag-amber" id="vocab-count">— 항목</span>
+        </div>
+        <textarea class="vocab-textarea" id="vocab-editor" placeholder="로딩 중..."></textarea>
+      </div>
+      <div class="vocab-names">
+        <div class="vocab-toolbar">
+          <span class="card-title">구성원 명단</span>
+          <span class="tag tag-teal" id="names-count">— 명</span>
+        </div>
+        <div class="names-table-wrap">
+          <table class="names-table">
+            <thead><tr><th>실명</th><th>별명</th></tr></thead>
+            <tbody id="names-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stats -->
+  <section class="section" id="stats">
+    <div class="sec-head">
+      <div>
+        <div class="sec-title">통계</div>
+        <div class="sec-sub">회의 활동 분석</div>
+      </div>
+    </div>
+
+    <div class="stats-top">
+      <div class="big-stat">
+        <div class="big-stat-val amber" id="s-total">—</div>
+        <div class="big-stat-lbl">전체 회의록</div>
+      </div>
+      <div class="big-stat">
+        <div class="big-stat-val" id="s-month">—</div>
+        <div class="big-stat-lbl">이번 달</div>
+      </div>
+      <div class="big-stat">
+        <div class="big-stat-val" id="s-words">—</div>
+        <div class="big-stat-lbl">총 단어 수</div>
+      </div>
+    </div>
+
+    <div class="stats-bottom">
+      <div class="chart-card">
+        <div class="card-head"><span class="card-title">월별 회의록</span></div>
+        <div class="chart-body" id="chart-body"></div>
+      </div>
+      <div class="recent-activity">
+        <div class="card-head"><span class="card-title">최근 활동</span></div>
+        <div id="stats-recent" style="flex:1;overflow-y:auto"></div>
+      </div>
+    </div>
+  </section>
+
+</div><!-- /main -->
+</div><!-- /app -->
+
+<div class="toast-wrap" id="toasts"></div>
+
+<script>
+// ── State ──────────────────────────────────────────────────────────
+const API = 'http://localhost:7373';
+let allNotes = [];
+let currentNote = null;
+let isRecording = false;
+let recStartTime = null;
+let recTimerInterval = null;
+let vocabOriginal = '';
+
+// ── Init ───────────────────────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  // Update clock
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  // Navigation
+  document.querySelectorAll('.nav-item').forEach(el => {
+    el.addEventListener('click', () => nav(el.dataset.sec));
+  });
+
+  // Connect SSE
+  connectSSE();
+
+  // Load initial data
+  loadStatus();
+  loadDashboard();
+});
+
+function updateClock() {
+  const el = document.getElementById('dash-time');
+  if (el) el.textContent = new Date().toLocaleString('ko-KR', { dateStyle: 'full', timeStyle: 'short' });
+}
+
+// ── Navigation ─────────────────────────────────────────────────────
+function nav(sec) {
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.toggle('active', el.dataset.sec === sec));
+  document.querySelectorAll('.section').forEach(el => el.classList.toggle('active', el.id === sec));
+  if (sec === 'notes')  loadNotes();
+  if (sec === 'vocab')  loadVocab();
+  if (sec === 'stats')  loadStats();
+}
+
+// ── SSE ────────────────────────────────────────────────────────────
+function connectSSE() {
+  const es = new EventSource(`${API}/api/stream`);
+  const dot   = document.getElementById('status-dot');
+  const label = document.getElementById('status-label');
+  const logStatus = document.getElementById('log-status');
+
+  es.onopen = () => {
+    logStatus.textContent = '연결됨';
+    logStatus.className = 'tag tag-teal';
+  };
+
+  es.onmessage = (e) => {
+    const d = JSON.parse(e.data);
+    if (d.type === 'log') appendLog(d.line);
+    if (d.type === 'note') {
+      loadDashboard();
+      if (document.getElementById('notes').classList.contains('active')) loadNotes();
+      if (document.getElementById('stats').classList.contains('active')) loadStats();
+    }
+    if (d.type === 'status') updateDaemonUI(d.running);
+  };
+
+  es.onerror = () => {
+    logStatus.textContent = '끊김';
+    logStatus.className = 'tag';
+    setTimeout(connectSSE, 3000);
+  };
+}
+
+function appendLog(line) {
+  const feeds = ['log-feed', 'rec-log'];
+  feeds.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const div = document.createElement('div');
+    div.className = 'log-line';
+    if (line.includes('✅') || line.includes('완료') || line.includes('저장')) div.className += ' ok';
+    else if (line.includes('❌') || line.includes('실패')) div.className += ' err';
+    else if (line.includes('⚠️')) div.className += ' warn';
+    else if (line.includes('🚀') || line.includes('▶') || line.includes('시작')) div.className += ' start';
+    else if (line.includes('📝') || line.includes('📄') || line.includes('🎙️')) div.className += ' info';
+    div.textContent = line;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+    // Keep last 100 lines
+    while (el.children.length > 100) el.removeChild(el.firstChild);
+  });
+}
+
+// ── API helpers ────────────────────────────────────────────────────
+async function api(path, opts = {}) {
+  try {
+    const r = await fetch(API + path, { headers: { 'Content-Type': 'application/json' }, ...opts });
+    return await r.json();
+  } catch { return null; }
+}
+
+// ── Status ─────────────────────────────────────────────────────────
+async function loadStatus() {
+  const d = await api('/api/status');
+  if (!d) return;
+  updateDaemonUI(d.running);
+
+  const foldersEl = document.getElementById('dash-folders');
+  if (foldersEl && d.watching) {
+    foldersEl.innerHTML = d.watching.map(f => `
+      <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r2);padding:10px 14px">
+        <div style="font-family:var(--fm);font-size:11px;color:var(--text2);word-break:break-all;">${f.replace(/^\/Users\/[^\/]+/, '~')}</div>
+      </div>
+    `).join('') + `
+      <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r2);padding:10px 14px">
+        <div style="font-family:var(--fm);font-size:11px;color:var(--text2);word-break:break-all;">${(d.outputDir||'').replace(/^\/Users\/[^\/]+/, '~')} <span style="color:var(--text3)">← 출력</span></div>
+      </div>`;
+    const statWatching = document.getElementById('stat-watching');
+    if (statWatching) statWatching.textContent = d.watching.length;
+  }
+}
+
+function updateDaemonUI(running) {
+  const dot   = document.getElementById('status-dot');
+  const label = document.getElementById('status-label');
+  const btnStart = document.getElementById('btn-daemon-start');
+  const btnStop  = document.getElementById('btn-daemon-stop');
+
+  dot.className = 'status-dot' + (running ? ' running' : '');
+  label.textContent = running ? '감시 중' : '중지됨';
+  label.className = 'status-label' + (running ? ' running' : '');
+  if (btnStart) btnStart.style.display = running ? 'none' : '';
+  if (btnStop)  btnStop.style.display  = running ? '' : 'none';
+}
+
+async function daemonStart() {
+  await api('/api/daemon/start', { method: 'POST', body: '{}' });
+  setTimeout(loadStatus, 1000);
+  toast('데몬 시작됨');
+}
+async function daemonStop() {
+  await api('/api/daemon/stop', { method: 'POST', body: '{}' });
+  setTimeout(loadStatus, 1000);
+  toast('데몬 중지됨');
+}
+
+// ── Dashboard ──────────────────────────────────────────────────────
+async function loadDashboard() {
+  loadStatus();
+  const [notes, stats] = await Promise.all([api('/api/notes'), api('/api/stats')]);
+
+  if (notes) {
+    allNotes = notes;
+    document.getElementById('badge-notes').textContent = notes.length;
+
+    // Stat cards
+    document.getElementById('stat-total').textContent = stats?.total ?? notes.length;
+    document.getElementById('stat-month').textContent = stats?.thisMonth ?? '—';
+    document.getElementById('stat-words').textContent = stats ? fmtNum(stats.totalWords) : '—';
+
+    // Recent notes
+    const el = document.getElementById('dash-notes');
+    if (el) {
+      if (notes.length === 0) {
+        el.innerHTML = '<div class="empty" style="height:120px"><div class="empty-icon">◈</div><div class="empty-text">회의록 없음</div></div>';
+      } else {
+        el.innerHTML = notes.slice(0, 8).map(n => noteItemHTML(n, false)).join('');
+        el.querySelectorAll('.note-item').forEach((el, i) => {
+          el.addEventListener('click', () => { nav('notes'); setTimeout(() => openNote(notes[i]), 100); });
+        });
+      }
+    }
+  }
+}
+
+function noteItemHTML(n, active = false) {
+  return `<div class="note-item ${active ? 'active' : ''}" data-file="${n.file}">
+    <div style="flex:1;min-width:0">
+      <div class="note-title">${esc(n.title)}</div>
+      <div class="note-meta">
+        <span class="note-date">${n.date || '날짜 없음'}</span>
+        <span class="note-words">${fmtNum(n.words)}단어</span>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── Notes ──────────────────────────────────────────────────────────
+async function loadNotes() {
+  const notes = await api('/api/notes');
+  if (!notes) return;
+  allNotes = notes;
+  const countEl = document.getElementById('notes-count');
+  if (countEl) countEl.textContent = `${notes.length}개의 회의록`;
+  renderNotesList(notes);
+}
+
+function renderNotesList(notes) {
+  const el = document.getElementById('notes-list-body');
+  if (!el) return;
+  if (notes.length === 0) {
+    el.innerHTML = '<div class="empty" style="height:200px"><div class="empty-icon">◈</div><div class="empty-text">회의록 없음</div></div>';
+    return;
+  }
+  el.innerHTML = notes.map(n => noteItemHTML(n, n.file === currentNote?.file)).join('');
+  el.querySelectorAll('.note-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const note = notes.find(n => n.file === item.dataset.file);
+      if (note) openNote(note);
+    });
+  });
+}
+
+async function openNote(note) {
+  currentNote = note;
+  const data = await api(`/api/notes/${encodeURIComponent(note.file)}`);
+  if (!data?.content) return;
+
+  const viewer = document.getElementById('note-viewer');
+  viewer.innerHTML = `
+    <div class="viewer-toolbar">
+      <span class="viewer-title">${esc(note.title)}</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <span style="font-family:var(--fm);font-size:11px;color:var(--text3)">${fmtNum(note.words)}단어</span>
+        <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" onclick="deleteNote('${note.file}')">삭제</button>
+      </div>
+    </div>
+    <div class="viewer-body md" id="viewer-content"></div>`;
+
+  document.getElementById('viewer-content').innerHTML = marked.parse(data.content);
+
+  // Re-render list to update active state
+  renderNotesList(allNotes);
+}
+
+async function deleteNote(file) {
+  if (!confirm(`"${file}" 을 삭제할까요?`)) return;
+  await api(`/api/notes/${encodeURIComponent(file)}`, { method: 'DELETE' });
+  currentNote = null;
+  document.getElementById('note-viewer').innerHTML = '<div class="viewer-empty"><div class="viewer-empty-icon">◈</div><div class="viewer-empty-text">회의록을 선택하세요</div></div>';
+  loadNotes();
+  loadDashboard();
+  toast('삭제됨', 'ok');
+}
+
+async function onSearch(q) {
+  if (!q.trim()) { renderNotesList(allNotes); return; }
+  const results = await api(`/api/search?q=${encodeURIComponent(q)}`);
+  if (!results) return;
+  const el = document.getElementById('notes-list-body');
+  if (results.length === 0) {
+    el.innerHTML = '<div class="empty" style="height:100px"><div class="empty-text">검색 결과 없음</div></div>';
+    return;
+  }
+  el.innerHTML = results.map(r => {
+    const note = allNotes.find(n => n.file === r.file) || { file: r.file, title: r.file, date: '', words: 0 };
+    return `<div class="note-item" data-file="${r.file}">
+      <div style="flex:1;min-width:0">
+        <div class="note-title">${esc(note.title)}</div>
+        <div style="font-size:11px;color:var(--text3);margin-top:4px;line-height:1.4;font-family:var(--fm)">${esc(r.excerpt)}</div>
+      </div>
+    </div>`;
+  }).join('');
+  el.querySelectorAll('.note-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const note = allNotes.find(n => n.file === item.dataset.file) || { file: item.dataset.file, title: item.dataset.file, date: '', words: 0 };
+      openNote(note);
+    });
+  });
+}
+
+// ── Record ─────────────────────────────────────────────────────────
+let recState = 'idle'; // idle | recording | stopping
+
+function toggleRecord() {
+  if (recState === 'idle') startRecording();
+  else if (recState === 'recording') showStopForm();
+}
+
+async function startRecording() {
+  const r = await api('/api/record/start', { method: 'POST', body: '{}' });
+  if (!r?.ok) { toast('녹음 시작 실패', 'err'); return; }
+  recState = 'recording';
+  recStartTime = Date.now();
+  const wrap = document.getElementById('rec-wrap');
+  const btn  = document.getElementById('rec-btn');
+  wrap.classList.add('recording');
+  btn.classList.add('recording');
+  document.getElementById('rec-icon').textContent = '⏹';
+  document.getElementById('rec-label').textContent = '클릭하여 종료';
+  document.getElementById('rec-state').textContent = '녹음 중...';
+  document.getElementById('rec-timer').classList.add('active');
+  recTimerInterval = setInterval(updateTimer, 1000);
+  toast('녹음 시작됨 — Voice Memos가 열립니다');
+}
+
+function showStopForm() {
+  recState = 'stopping';
+  document.getElementById('rec-btn').style.pointerEvents = 'none';
+  document.getElementById('rec-state').textContent = '제목을 입력하세요';
+  document.getElementById('stop-form').classList.add('show');
+  document.getElementById('stop-title').focus();
+}
+
+function cancelStop() {
+  recState = 'recording';
+  document.getElementById('rec-btn').style.pointerEvents = '';
+  document.getElementById('rec-state').textContent = '녹음 중...';
+  document.getElementById('stop-form').classList.remove('show');
+}
+
+async function finishRecord() {
+  const title = document.getElementById('stop-title').value.trim() || '회의';
+  stopTimer();
+  document.getElementById('stop-form').classList.remove('show');
+  document.getElementById('rec-state').textContent = '전사 중...';
+
+  const r = await api('/api/record/stop', { method: 'POST', body: JSON.stringify({ title }) });
+  if (r?.ok) toast('전사 시작됨 — 잠시 기다려주세요');
+  else toast('요청 실패', 'err');
+  resetRecBtn();
+}
+
+function stopTimer() {
+  clearInterval(recTimerInterval); recTimerInterval = null;
+}
+function resetRecBtn() {
+  recState = 'idle'; recStartTime = null;
+  const wrap = document.getElementById('rec-wrap');
+  const btn  = document.getElementById('rec-btn');
+  wrap.classList.remove('recording');
+  btn.classList.remove('recording');
+  btn.style.pointerEvents = '';
+  document.getElementById('rec-icon').textContent = '🎙️';
+  document.getElementById('rec-label').textContent = '녹음 시작';
+  document.getElementById('rec-timer').textContent = '00:00';
+  document.getElementById('rec-timer').classList.remove('active');
+  document.getElementById('rec-state').textContent = '클릭하여 녹음 시작';
+  document.getElementById('stop-title').value = '';
+}
+function updateTimer() {
+  const s = Math.floor((Date.now() - recStartTime) / 1000);
+  const m = Math.floor(s / 60);
+  document.getElementById('rec-timer').textContent = `${String(m).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+}
+
+function onFileSelect(input) {
+  if (input.files[0]) {
+    // Can't get full path from browser security model
+    // Show file name and ask for path
+    document.getElementById('file-path-input').placeholder = `선택됨: ${input.files[0].name}`;
+    toast('파일 경로를 직접 입력해주세요 (보안 제한)');
+  }
+}
+
+async function transcribeFile() {
+  const file = document.getElementById('file-path-input').value.trim();
+  if (!file) { toast('파일 경로를 입력하세요', 'err'); return; }
+  const r = await api('/api/transcribe', { method: 'POST', body: JSON.stringify({ file }) });
+  if (r?.ok) toast('전사 시작됨');
+  else toast(r?.error || '실패', 'err');
+}
+
+// ── Vocab ──────────────────────────────────────────────────────────
+async function loadVocab() {
+  const d = await api('/api/vocab');
+  if (!d) return;
+  vocabOriginal = d.glossary || '';
+  const ed = document.getElementById('vocab-editor');
+  if (ed) ed.value = d.glossary || '';
+
+  // Count glossary terms
+  const count = (d.glossary || '').split('\n').filter(l => l.startsWith('- **')).length;
+  const el = document.getElementById('vocab-count');
+  if (el) el.textContent = `${count}개 항목`;
+
+  // Parse names table
+  const tbody = document.getElementById('names-tbody');
+  if (tbody && d.names) {
+    const rows = d.names.split('\n')
+      .filter(l => l.startsWith('|') && !l.includes('실명') && !l.includes('---'))
+      .map(l => l.split('|').map(c => c.trim()).filter(Boolean));
+    tbody.innerHTML = rows.map(([name, nick]) => `<tr><td>${esc(name||'')}</td><td>${esc(nick||'')}</td></tr>`).join('');
+    const countEl = document.getElementById('names-count');
+    if (countEl) countEl.textContent = `${rows.length}명`;
+  }
+}
+
+async function saveVocab() {
+  const content = document.getElementById('vocab-editor').value;
+  const r = await api('/api/vocab/glossary', { method: 'PUT', body: JSON.stringify({ content }) });
+  if (r?.ok) { vocabOriginal = content; toast('저장됨', 'ok'); }
+  else toast('저장 실패', 'err');
+
+  // Update count
+  const count = content.split('\n').filter(l => l.startsWith('- **')).length;
+  const el = document.getElementById('vocab-count');
+  if (el) el.textContent = `${count}개 항목`;
+}
+
+// ── Stats ──────────────────────────────────────────────────────────
+async function loadStats() {
+  const d = await api('/api/stats');
+  const notes = await api('/api/notes');
+  if (!d) return;
+
+  document.getElementById('s-total').textContent = d.total;
+  document.getElementById('s-month').textContent = d.thisMonth;
+  document.getElementById('s-words').textContent = fmtNum(d.totalWords);
+
+  // Monthly chart
+  const chart = document.getElementById('chart-body');
+  if (chart && d.byMonth) {
+    const now = new Date();
+    const currentM = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const months = Object.entries(d.byMonth).sort(([a],[b]) => a.localeCompare(b)).slice(-12);
+    const max = Math.max(...months.map(([,v]) => v), 1);
+    chart.innerHTML = months.map(([m, v]) => `
+      <div class="bar-wrap">
+        <div class="bar ${m === currentM ? 'current' : ''}"
+             data-val="${v}"
+             style="height:${Math.round((v/max)*180)}px"></div>
+        <div class="bar-lbl">${m.slice(5)}</div>
+      </div>`).join('');
+  }
+
+  // Recent activity
+  if (notes) {
+    const el = document.getElementById('stats-recent');
+    if (el) {
+      el.innerHTML = notes.slice(0, 12).map(n => `
+        <div class="note-item" data-file="${n.file}" onclick="nav('notes');setTimeout(()=>openNote(${JSON.stringify(n)}),100)">
+          <div style="flex:1;min-width:0">
+            <div class="note-title" style="font-size:12.5px">${esc(n.title)}</div>
+            <div class="note-meta"><span class="note-date">${n.date}</span><span>${fmtNum(n.words)}단어</span></div>
+          </div>
+        </div>`).join('');
+    }
+  }
+}
+
+// ── Toast ──────────────────────────────────────────────────────────
+function toast(msg, type = '') {
+  const wrap = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  wrap.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// ── Utils ──────────────────────────────────────────────────────────
+function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function fmtNum(n) {
+  if (n >= 10000) return (n/10000).toFixed(1) + '만';
+  return n.toLocaleString();
+}
+</script>
+</body>
+</html>

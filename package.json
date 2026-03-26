@@ -1,8 +1,9 @@
 {
-  "name": "yapnotes",
+  "name": "merrynote",
   "version": "1.0.0",
-  "description": "Just yap — your meeting notes write themselves. Record, transcribe, and summarize with Claude.",
+  "description": "MerryNote — your meeting notes write themselves. Record, transcribe, and summarize with Claude.",
   "bin": {
+    "merrynote": "./bin/setup.js",
     "yapnotes": "./bin/setup.js"
   },
   "keywords": [
@@ -13,22 +14,29 @@
     "voice-memos",
     "raycast",
     "notes",
+    "merrynote",
     "yapnotes"
   ],
   "author": "mingj7235 <joshuara7235@gmail.com>",
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "https://github.com/mingj7235/yapnotes"
+    "url": "https://github.com/merryAI-dev/merrynote"
   },
-  "homepage": "https://github.com/mingj7235/yapnotes#readme",
+  "homepage": "https://github.com/merryAI-dev/merrynote#readme",
   "engines": {
     "node": ">=16"
   },
   "files": [
     "bin/",
     "skills/",
+    "scripts/",
+    "vocab/",
+    "daemon/",
+    "menubar/",
     "raycast-scripts/",
+    "server/",
+    "web/",
     "README.md"
   ]
 }

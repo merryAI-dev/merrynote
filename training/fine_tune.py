@@ -5,13 +5,13 @@ MYSC 회의 오디오 + 전사문 페어로 whisper 모델을 파인튜닝한다
 Apple Silicon (MPS) 호환. 증분 학습(resume) 지원.
 
 Usage:
-    python fine_tune.py --data-dir ~/.yapnotes/training-data \
-                        --output-dir ~/.yapnotes/models/whisper-mysc \
+    python fine_tune.py --data-dir ~/.merrynote/training-data \
+                        --output-dir ~/.merrynote/models/whisper-mysc \
                         --epochs 3 --resume
 
     # 교정된 텍스트 사용 (Claude 마크다운에서 추출)
-    python fine_tune.py --data-dir ~/.yapnotes/training-data \
-                        --output-dir ~/.yapnotes/models/whisper-mysc \
+    python fine_tune.py --data-dir ~/.merrynote/training-data \
+                        --output-dir ~/.merrynote/models/whisper-mysc \
                         --use-corrected --epochs 3
 """
 

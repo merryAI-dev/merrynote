@@ -5,8 +5,8 @@ transcribe.sh에서 subprocess로 호출됨.
 stdout으로 전사 텍스트 출력, stderr로 상태 메시지.
 
 Usage:
-    python transcribe_finetuned.py --audio /tmp/yapnotes-xxx.wav \
-                                   --model ~/.yapnotes/models/whisper-mysc
+    python transcribe_finetuned.py --audio /tmp/merrynote-xxx.wav \
+                                   --model ~/.merrynote/models/whisper-mysc
 """
 
 import argparse

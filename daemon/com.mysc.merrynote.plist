@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.mysc.yapnotes</string>
+    <string>com.mysc.merrynote</string>
 
     <key>ProgramArguments</key>
     <array>
@@ -11,17 +11,21 @@
         <string>MERRYNOTE_ROOT_PLACEHOLDER/daemon/merrynoted.sh</string>
     </array>
 
+    <!-- 로그인 시 자동 시작 -->
     <key>RunAtLoad</key>
     <true/>
 
+    <!-- 크래시/종료 시 자동 재시작 -->
     <key>KeepAlive</key>
     <true/>
 
+    <!-- 로그 파일 -->
     <key>StandardOutPath</key>
     <string>LOG_FILE_PLACEHOLDER</string>
     <key>StandardErrorPath</key>
     <string>LOG_FILE_PLACEHOLDER</string>
 
+    <!-- PATH: Homebrew + swift 경로 포함 -->
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
@@ -30,6 +34,7 @@
         <string>HOME_PLACEHOLDER</string>
     </dict>
 
+    <!-- 재시작 간격 (5초 이내 재시작 반복 시 30초 대기) -->
     <key>ThrottleInterval</key>
     <integer>30</integer>
 </dict>
