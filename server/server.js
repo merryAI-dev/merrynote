@@ -182,18 +182,35 @@ const MIME = {
   ".css": "text/css",
   ".ico": "image/x-icon",
 };
+const LOOPBACK_ORIGIN_RE = /^https?:\/\/(?:localhost|127(?:\.\d{1,3}){3})(?::\d+)?$/;
 
 function jsonRes(res, data, status = 200) {
   res.writeHead(status, { "Content-Type": "application/json" });
   res.end(JSON.stringify(data));
 }
 
+function applyCors(req, res) {
+  const origin = req.headers.origin;
+  if (!origin || !LOOPBACK_ORIGIN_RE.test(origin)) return;
+  res.setHeader("Access-Control-Allow-Origin", origin);
+  res.setHeader("Vary", "Origin");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,OPTIONS");
+}
+
 function router(req, res) {
-  res.setHeader("Access-Control-Allow-Origin", `http://localhost:${PORT}`);
-  const raw = new URL(req.url, `http://localhost:${PORT}`);
+  applyCors(req, res);
+  const baseUrl = `${(req.headers["x-forwarded-proto"] || "http").split(",")[0]}://${req.headers.host || `localhost:${PORT}`}`;
+  const raw = new URL(req.url, baseUrl);
   const p = raw.pathname;
   const q = Object.fromEntries(raw.searchParams);
   const method = req.method.toUpperCase();
+
+  if (method === "OPTIONS") {
+    res.writeHead(204);
+    res.end();
+    return;
+  }
 
   if (!p.startsWith("/api/")) {
     const fp = path.join(WEB, p === "/" ? "index.html" : p);

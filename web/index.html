@@ -813,7 +813,7 @@ body::after {
 
 <script>
 // ── State ──────────────────────────────────────────────────────────
-const API = 'http://localhost:7373';
+const API = window.location.protocol === 'file:' ? 'http://localhost:7373' : window.location.origin;
 let allNotes = [];
 let currentNote = null;
 let isRecording = false;
