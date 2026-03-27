@@ -2,6 +2,10 @@
   "name": "merrynote",
   "version": "1.0.0",
   "description": "MerryNote — your meeting notes write themselves. Record, transcribe, and summarize with Claude.",
+  "scripts": {
+    "start": "node server/server.js",
+    "start:hosted": "MERRYNOTE_HOSTED_MODE=1 node server/server.js"
+  },
   "bin": {
     "merrynote": "./bin/setup.js",
     "yapnotes": "./bin/setup.js"

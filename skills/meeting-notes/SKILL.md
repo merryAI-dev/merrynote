@@ -61,6 +61,15 @@ Use the following structure as a base, adapting flexibly to fit the content:
 
 ## 미결 사항 / 추가 논의 필요
 - Unresolved items (if any)
+
+## 비용 / 승인 포인트
+- Budget, API/server/tooling cost concerns, approval owners, reporting expectations (if discussed)
+
+## 리스크 / 윤리
+- Risks, policy concerns, non-compliant requests, ethical handling rules (if discussed)
+
+## 데이터 준비도
+- Data quality, dataset gaps, evidence readiness, what blocks deployment or evaluation (if discussed)
 ```
 
 ### 4. Core Principles
@@ -76,9 +85,10 @@ Use the following structure as a base, adapting flexibly to fit the content:
 9. **Decisions vs Open**: Clearly separate decided items from unresolved items.
 10. **Use dividers**: Separate sections visually with `---` horizontal rules.
 11. **Number sections**: Number each section for easy reference.
+12. **Operationalize AI talk**: If the meeting discusses AI/AX rollout, convert vague discussion into accountable categories: **cost**, **approval**, **risk/ethics**, **data readiness**, **owners**.
 
 ### 5. Section Flexibility
-- Omit sections (결정 사항, 액션 아이템, 미결 사항) if they don't apply to the content.
+- Omit sections (결정 사항, 액션 아이템, 미결 사항, 비용 / 승인 포인트, 리스크 / 윤리, 데이터 준비도) if they don't apply to the content.
 - Add sections as needed based on the content's nature (e.g., Q&A, key takeaways, references).
 
 ## Execution Flow
@@ -194,4 +204,3 @@ When a name appears garbled or only a nickname is used, resolve using this table
 | 김미연 | 메이 |
 
 > **Usage rule**: In speaker attribution and action items, use whichever form appears more naturally in context (nickname preferred if that's what was spoken). Annotate as `별명(실명)` on first mention if both are identifiable — e.g., `에이블(김정태)`.
-

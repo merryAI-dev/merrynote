@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: merrynote-web
+    env: node
+    plan: starter
+    autoDeploy: true
+    buildCommand: npm install
+    startCommand: npm run start:hosted
+    healthCheckPath: /healthz
+    disk:
+      name: merrynote-data
+      mountPath: /var/data
+      sizeGB: 10
+    envVars:
+      - key: NODE_VERSION
+        value: 20.19.0
+      - key: MERRYNOTE_HOSTED_MODE
+        value: "1"
+      - key: MERRYNOTE_DATA_DIR
+        value: /var/data/merrynote
+      - key: MERRYNOTE_NOTES_DIR
+        value: /var/data/merrynote/notes
+      - key: MERRYNOTE_VOCAB_DIR
+        value: /var/data/merrynote/vocab
+      - key: MERRYNOTE_LOG_FILE
+        value: /var/data/merrynote/logs/merrynote.log

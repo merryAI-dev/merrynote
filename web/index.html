@@ -212,6 +212,29 @@ body::after {
 .btn-ghost:hover { background: var(--bg3); color: var(--text); }
 .btn-danger { background: rgba(248,113,113,.08); color: var(--red); border-color: rgba(248,113,113,.2); }
 .btn-danger:hover { background: rgba(248,113,113,.15); }
+.btn:disabled,
+.is-disabled {
+  opacity: .45;
+  pointer-events: none;
+  filter: grayscale(.2);
+}
+
+.runtime-banner {
+  display: none;
+  margin: -10px 0 18px;
+  padding: 12px 14px;
+  border-radius: var(--r2);
+  border: 1px solid var(--border2);
+  background: var(--bg3);
+  color: var(--text2);
+  font-size: 12px;
+}
+.runtime-banner.show { display: block; }
+.runtime-banner strong { color: var(--text); }
+.runtime-banner.hosted {
+  border-color: rgba(240,160,32,.18);
+  background: rgba(240,160,32,.06);
+}
 
 /* ── Dashboard ── */
 #dash .grid {
@@ -222,7 +245,7 @@ body::after {
   flex: 1;
   min-height: 0;
 }
-.stat-row { grid-column: 1 / 3; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.stat-row { grid-column: 1 / 3; display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
 
 .stat-card {
   background: var(--bg2); border: 1px solid var(--border);
@@ -258,9 +281,19 @@ body::after {
 .note-title { font-size: 13px; font-weight: 500; color: var(--text); line-height: 1.3; }
 .note-meta {
   margin-top: 3px; font-size: 11px; color: var(--text3);
-  font-family: var(--fm); display: flex; gap: 10px;
+  font-family: var(--fm); display: flex; gap: 10px; flex-wrap: wrap;
 }
 .note-words { }
+.note-chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border2);
+  font-size: 10px; line-height: 1.5;
+}
+.note-chip.decision { color: var(--teal); background: var(--teal-bg); }
+.note-chip.action { color: var(--amber); background: var(--amber-bg); }
+.note-chip.open { color: var(--red); background: rgba(248,113,113,.08); border-color: rgba(248,113,113,.2); }
+.note-chip.gov { color: var(--text2); background: var(--bg3); }
 
 /* ── Log feed ── */
 .log-feed {
@@ -482,7 +515,7 @@ body::after {
 .names-table td:first-child { color: var(--text); font-weight: 500; }
 
 /* ── Stats section ── */
-#stats .stats-top { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 20px; }
+#stats .stats-top { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 20px; }
 
 .big-stat {
   background: var(--bg2); border: 1px solid var(--border); border-radius: var(--r);
@@ -627,6 +660,14 @@ body::after {
           <div class="stat-val" id="stat-watching">—</div>
           <div class="stat-lbl">감시 폴더</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-val" id="stat-actions">—</div>
+          <div class="stat-lbl">액션 아이템</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-val" id="stat-open">—</div>
+          <div class="stat-lbl">미결 사항</div>
+        </div>
       </div>
 
       <!-- Recent notes -->
@@ -684,9 +725,10 @@ body::after {
     <div class="sec-head">
       <div>
         <div class="sec-title">녹음</div>
-        <div class="sec-sub">Voice Memos + MYSC vocab 주입 전사</div>
+        <div class="sec-sub" id="record-subtitle">Voice Memos + MYSC vocab 주입 전사</div>
       </div>
     </div>
+    <div class="runtime-banner" id="runtime-banner"></div>
     <div class="rec-layout">
       <!-- Main record area -->
       <div class="rec-main">
@@ -725,7 +767,7 @@ body::after {
             <input type="file" id="hidden-file" accept="audio/*" style="display:none" onchange="onFileSelect(this)">
             <div class="file-input-row">
               <input class="file-input" id="file-path-input" placeholder="/path/to/recording.m4a">
-              <button class="btn btn-amber" onclick="transcribeFile()">전사</button>
+              <button class="btn btn-amber" id="transcribe-btn" onclick="transcribeFile()">전사</button>
             </div>
           </div>
         </div>
@@ -792,6 +834,14 @@ body::after {
         <div class="big-stat-val" id="s-words">—</div>
         <div class="big-stat-lbl">총 단어 수</div>
       </div>
+      <div class="big-stat">
+        <div class="big-stat-val" id="s-actions">—</div>
+        <div class="big-stat-lbl">액션 아이템</div>
+      </div>
+      <div class="big-stat">
+        <div class="big-stat-val" id="s-open">—</div>
+        <div class="big-stat-lbl">미결 사항</div>
+      </div>
     </div>
 
     <div class="stats-bottom">
@@ -820,6 +870,7 @@ let isRecording = false;
 let recStartTime = null;
 let recTimerInterval = null;
 let vocabOriginal = '';
+let runtimeInfo = { hosted: false, capabilities: {} };
 
 // ── Init ───────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
@@ -843,6 +894,42 @@ document.addEventListener('DOMContentLoaded', () => {
 function updateClock() {
   const el = document.getElementById('dash-time');
   if (el) el.textContent = new Date().toLocaleString('ko-KR', { dateStyle: 'full', timeStyle: 'short' });
+}
+
+function setRuntimeInfo(info) {
+  if (!info) return;
+  runtimeInfo = info;
+
+  const banner = document.getElementById('runtime-banner');
+  const subtitle = document.getElementById('record-subtitle');
+  const recWrap = document.getElementById('rec-wrap');
+  const recBtn = document.getElementById('rec-btn');
+  const processDrop = document.getElementById('process-drop');
+  const hiddenFile = document.getElementById('hidden-file');
+  const pathInput = document.getElementById('file-path-input');
+  const transcribeBtn = document.getElementById('transcribe-btn');
+
+  if (info.hosted) {
+    if (banner) {
+      banner.className = 'runtime-banner hosted show';
+      banner.innerHTML = '<strong>Hosted control room mode</strong><br>이 화면은 Notes · Vocab · Stats 운영 콘솔입니다. Voice Memos 제어, launchctl 데몬, 서버 로컬 파일 경로 전사는 비활성화되어 있습니다.';
+    }
+    if (subtitle) subtitle.textContent = 'Hosted control room · Notes / Vocab / Stats';
+  } else {
+    if (banner) {
+      banner.className = 'runtime-banner';
+      banner.textContent = '';
+    }
+    if (subtitle) subtitle.textContent = 'Voice Memos + MYSC vocab 주입 전사';
+  }
+
+  [recWrap, recBtn, processDrop, transcribeBtn].forEach(el => {
+    if (!el) return;
+    el.classList.toggle('is-disabled', Boolean(info.hosted));
+  });
+  if (hiddenFile) hiddenFile.disabled = Boolean(info.hosted);
+  if (pathInput) pathInput.disabled = Boolean(info.hosted);
+  if (transcribeBtn) transcribeBtn.disabled = Boolean(info.hosted);
 }
 
 // ── Navigation ─────────────────────────────────────────────────────
@@ -916,20 +1003,29 @@ async function api(path, opts = {}) {
 async function loadStatus() {
   const d = await api('/api/status');
   if (!d) return;
+  setRuntimeInfo(d.runtime);
   updateDaemonUI(d.running);
 
   const foldersEl = document.getElementById('dash-folders');
-  if (foldersEl && d.watching) {
-    foldersEl.innerHTML = d.watching.map(f => `
+  if (foldersEl) {
+    const cards = (d.watching || []).map(f => `
       <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r2);padding:10px 14px">
         <div style="font-family:var(--fm);font-size:11px;color:var(--text2);word-break:break-all;">${f.replace(/^\/Users\/[^\/]+/, '~')}</div>
       </div>
-    `).join('') + `
+    `);
+    cards.push(`
       <div style="background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r2);padding:10px 14px">
         <div style="font-family:var(--fm);font-size:11px;color:var(--text2);word-break:break-all;">${(d.outputDir||'').replace(/^\/Users\/[^\/]+/, '~')} <span style="color:var(--text3)">← 출력</span></div>
-      </div>`;
+      </div>`);
+    if (runtimeInfo.hosted) {
+      cards.unshift(`
+        <div style="background:var(--amber-bg);border:1px solid rgba(240,160,32,.15);border-radius:var(--r2);padding:10px 14px">
+          <div style="font-family:var(--fm);font-size:11px;color:var(--amber);word-break:break-word;">hosted mode: 로컬 inbox/watch 경로 대신 Render data mount만 사용</div>
+        </div>`);
+    }
+    foldersEl.innerHTML = cards.join('');
     const statWatching = document.getElementById('stat-watching');
-    if (statWatching) statWatching.textContent = d.watching.length;
+    if (statWatching) statWatching.textContent = (d.watching || []).length;
   }
 }
 
@@ -939,6 +1035,15 @@ function updateDaemonUI(running) {
   const btnStart = document.getElementById('btn-daemon-start');
   const btnStop  = document.getElementById('btn-daemon-stop');
 
+  if (runtimeInfo.hosted) {
+    dot.className = 'status-dot running';
+    label.textContent = 'hosted mode';
+    label.className = 'status-label running';
+    if (btnStart) btnStart.style.display = 'none';
+    if (btnStop) btnStop.style.display = 'none';
+    return;
+  }
+
   dot.className = 'status-dot' + (running ? ' running' : '');
   label.textContent = running ? '감시 중' : '중지됨';
   label.className = 'status-label' + (running ? ' running' : '');
@@ -947,11 +1052,13 @@ function updateDaemonUI(running) {
 }
 
 async function daemonStart() {
+  if (runtimeInfo.hosted) { toast('Hosted mode에서는 launchctl 데몬을 제어하지 않습니다', 'err'); return; }
   await api('/api/daemon/start', { method: 'POST', body: '{}' });
   setTimeout(loadStatus, 1000);
   toast('데몬 시작됨');
 }
 async function daemonStop() {
+  if (runtimeInfo.hosted) { toast('Hosted mode에서는 launchctl 데몬을 제어하지 않습니다', 'err'); return; }
   await api('/api/daemon/stop', { method: 'POST', body: '{}' });
   setTimeout(loadStatus, 1000);
   toast('데몬 중지됨');
@@ -970,6 +1077,8 @@ async function loadDashboard() {
     document.getElementById('stat-total').textContent = stats?.total ?? notes.length;
     document.getElementById('stat-month').textContent = stats?.thisMonth ?? '—';
     document.getElementById('stat-words').textContent = stats ? fmtNum(stats.totalWords) : '—';
+    document.getElementById('stat-actions').textContent = stats ? fmtNum(stats.totalActionItems ?? 0) : '—';
+    document.getElementById('stat-open').textContent = stats ? fmtNum(stats.totalOpenItems ?? 0) : '—';
 
     // Recent notes
     const el = document.getElementById('dash-notes');
@@ -986,6 +1095,15 @@ async function loadDashboard() {
   }
 }
 
+function noteSignalChipsHTML(n) {
+  const chips = [];
+  if ((n.decisions || 0) > 0) chips.push(`<span class="note-chip decision">결정 ${fmtNum(n.decisions)}</span>`);
+  if ((n.actionItems || 0) > 0) chips.push(`<span class="note-chip action">액션 ${fmtNum(n.actionItems)}</span>`);
+  if ((n.openItems || 0) > 0) chips.push(`<span class="note-chip open">미결 ${fmtNum(n.openItems)}</span>`);
+  if ((n.governanceFlags || 0) > 0) chips.push(`<span class="note-chip gov">운영 ${fmtNum(n.governanceFlags)}</span>`);
+  return chips.join('');
+}
+
 function noteItemHTML(n, active = false) {
   return `<div class="note-item ${active ? 'active' : ''}" data-file="${n.file}">
     <div style="flex:1;min-width:0">
@@ -993,6 +1111,7 @@ function noteItemHTML(n, active = false) {
       <div class="note-meta">
         <span class="note-date">${n.date || '날짜 없음'}</span>
         <span class="note-words">${fmtNum(n.words)}단어</span>
+        ${noteSignalChipsHTML(n)}
       </div>
     </div>
   </div>`;
@@ -1035,6 +1154,7 @@ async function openNote(note) {
       <span class="viewer-title">${esc(note.title)}</span>
       <div style="display:flex;gap:6px;align-items:center">
         <span style="font-family:var(--fm);font-size:11px;color:var(--text3)">${fmtNum(note.words)}단어</span>
+        ${noteSignalChipsHTML(note)}
         <button class="btn btn-ghost" style="padding:4px 10px;font-size:11px" onclick="deleteNote('${note.file}')">삭제</button>
       </div>
     </div>
@@ -1086,6 +1206,7 @@ async function onSearch(q) {
 let recState = 'idle'; // idle | recording | stopping
 
 function toggleRecord() {
+  if (runtimeInfo.hosted) { toast('Hosted mode에서는 Voice Memos 녹음을 제어하지 않습니다', 'err'); return; }
   if (recState === 'idle') startRecording();
   else if (recState === 'recording') showStopForm();
 }
@@ -1158,6 +1279,11 @@ function updateTimer() {
 }
 
 function onFileSelect(input) {
+  if (runtimeInfo.hosted) {
+    toast('Hosted mode에서는 서버 로컬 파일 경로 전사를 지원하지 않습니다', 'err');
+    input.value = '';
+    return;
+  }
   if (input.files[0]) {
     // Can't get full path from browser security model
     // Show file name and ask for path
@@ -1167,6 +1293,7 @@ function onFileSelect(input) {
 }
 
 async function transcribeFile() {
+  if (runtimeInfo.hosted) { toast('Hosted mode에서는 업로드 워커가 아직 필요합니다', 'err'); return; }
   const file = document.getElementById('file-path-input').value.trim();
   if (!file) { toast('파일 경로를 입력하세요', 'err'); return; }
   const r = await api('/api/transcribe', { method: 'POST', body: JSON.stringify({ file }) });
@@ -1220,6 +1347,8 @@ async function loadStats() {
   document.getElementById('s-total').textContent = d.total;
   document.getElementById('s-month').textContent = d.thisMonth;
   document.getElementById('s-words').textContent = fmtNum(d.totalWords);
+  document.getElementById('s-actions').textContent = fmtNum(d.totalActionItems ?? 0);
+  document.getElementById('s-open').textContent = fmtNum(d.totalOpenItems ?? 0);
 
   // Monthly chart
   const chart = document.getElementById('chart-body');
@@ -1245,7 +1374,7 @@ async function loadStats() {
         <div class="note-item" data-file="${n.file}" onclick="nav('notes');setTimeout(()=>openNote(${JSON.stringify(n)}),100)">
           <div style="flex:1;min-width:0">
             <div class="note-title" style="font-size:12.5px">${esc(n.title)}</div>
-            <div class="note-meta"><span class="note-date">${n.date}</span><span>${fmtNum(n.words)}단어</span></div>
+            <div class="note-meta"><span class="note-date">${n.date}</span><span>${fmtNum(n.words)}단어</span>${noteSignalChipsHTML(n)}</div>
           </div>
         </div>`).join('');
     }

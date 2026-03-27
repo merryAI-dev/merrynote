@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// MerryNote local web server - zero external dependencies
+// MerryNote dashboard server - zero external dependencies
 // Usage: node server/server.js [port]  |  npx merrynote serve
 
 const http = require("http");
@@ -12,21 +12,32 @@ const HOME = os.homedir();
 const BRAND = "MerryNote";
 const PRIMARY_SERVICE_LABEL = "com.mysc.merrynote";
 const LEGACY_SERVICE_LABEL = "com.mysc.yapnotes";
-const PORT = parseInt(process.env.MERRYNOTE_PORT || process.env.YAPNOTES_PORT || process.argv[2] || "7373", 10);
 const ROOT = path.resolve(__dirname, "..");
 const WEB = path.join(ROOT, "web");
-
-const PRIMARY_CONFIG_FILE = path.join(HOME, ".merrynote", "config.json");
-const LEGACY_CONFIG_FILE = path.join(HOME, ".yapnotes", "config.json");
-const PRIMARY_LOG_FILE = path.join(HOME, ".merrynote", "merrynote.log");
-const LEGACY_LOG_FILE = path.join(HOME, ".yapnotes", "yapnotes.log");
+const REPO_VOCAB_DIR = path.join(ROOT, "vocab");
+const SCRIPTS_DIR = path.join(ROOT, "scripts");
+const RAYCAST_DIR = path.join(ROOT, "raycast-scripts");
+const PRIMARY_DATA_ROOT = path.join(HOME, ".merrynote");
+const LEGACY_DATA_ROOT = path.join(HOME, ".yapnotes");
+const HOSTED_MODE_HINT = String(process.env.MERRYNOTE_HOSTED_MODE || process.env.MERRYNOTE_RUNTIME || "").toLowerCase();
+const HOSTED_MODE =
+  HOSTED_MODE_HINT === "1" ||
+  HOSTED_MODE_HINT === "true" ||
+  HOSTED_MODE_HINT === "hosted" ||
+  Boolean(process.env.RENDER || process.env.RENDER_EXTERNAL_URL);
+const PORT = parseInt(process.env.PORT || process.env.MERRYNOTE_PORT || process.env.YAPNOTES_PORT || process.argv[2] || "7373", 10);
+const HOST = process.env.MERRYNOTE_HOST || (HOSTED_MODE ? "0.0.0.0" : "127.0.0.1");
+const DATA_ROOT = process.env.MERRYNOTE_DATA_DIR || "";
+const PRIMARY_CONFIG_FILE = process.env.MERRYNOTE_CONFIG_FILE || (HOSTED_MODE && DATA_ROOT ? path.join(DATA_ROOT, "config.json") : path.join(PRIMARY_DATA_ROOT, "config.json"));
+const LEGACY_CONFIG_FILE = path.join(LEGACY_DATA_ROOT, "config.json");
+const PRIMARY_LOG_FILE = process.env.MERRYNOTE_LOG_FILE || (HOSTED_MODE && DATA_ROOT ? path.join(DATA_ROOT, "logs", "merrynote.log") : path.join(PRIMARY_DATA_ROOT, "merrynote.log"));
+const LEGACY_LOG_FILE = path.join(LEGACY_DATA_ROOT, "yapnotes.log");
 const PRIMARY_PLIST_FILE = path.join(HOME, "Library", "LaunchAgents", "com.mysc.merrynote.plist");
 const LEGACY_PLIST_FILE = path.join(HOME, "Library", "LaunchAgents", "com.mysc.yapnotes.plist");
 const PRIMARY_ICLOUD_INBOX = path.join(HOME, "Library/Mobile Documents/com~apple~CloudDocs/merrynote-inbox");
 const LEGACY_ICLOUD_INBOX = path.join(HOME, "Library/Mobile Documents/com~apple~CloudDocs/yapnotes-inbox");
-const VOCAB_DIR = path.join(ROOT, "vocab");
-const SCRIPTS_DIR = path.join(ROOT, "scripts");
-const RAYCAST_DIR = path.join(ROOT, "raycast-scripts");
+const DEFAULT_NOTES_DIR = process.env.MERRYNOTE_NOTES_DIR || (HOSTED_MODE && DATA_ROOT ? path.join(DATA_ROOT, "notes") : path.join(HOME, "meeting-notes"));
+const VOCAB_DIR = process.env.MERRYNOTE_VOCAB_DIR || (HOSTED_MODE && DATA_ROOT ? path.join(DATA_ROOT, "vocab") : REPO_VOCAB_DIR);
 
 function firstExisting(primary, legacy) {
   if (fs.existsSync(primary)) return primary;
@@ -34,17 +45,54 @@ function firstExisting(primary, legacy) {
   return primary;
 }
 
-const CONFIG_FILE = firstExisting(PRIMARY_CONFIG_FILE, LEGACY_CONFIG_FILE);
-const LOG_FILE = firstExisting(PRIMARY_LOG_FILE, LEGACY_LOG_FILE);
-const PLIST_FILE = firstExisting(PRIMARY_PLIST_FILE, LEGACY_PLIST_FILE);
+const CONFIG_FILE = HOSTED_MODE ? PRIMARY_CONFIG_FILE : firstExisting(PRIMARY_CONFIG_FILE, LEGACY_CONFIG_FILE);
+const LOG_FILE = HOSTED_MODE ? PRIMARY_LOG_FILE : firstExisting(PRIMARY_LOG_FILE, LEGACY_LOG_FILE);
+const PLIST_FILE = HOSTED_MODE ? PRIMARY_PLIST_FILE : firstExisting(PRIMARY_PLIST_FILE, LEGACY_PLIST_FILE);
+
+function runtimeInfo() {
+  return {
+    mode: HOSTED_MODE ? "hosted" : "local",
+    hosted: HOSTED_MODE,
+    platform: process.platform,
+    host: HOST,
+    port: PORT,
+    capabilities: {
+      daemonControl: !HOSTED_MODE && process.platform === "darwin",
+      voiceMemosRecording: !HOSTED_MODE && process.platform === "darwin",
+      localFileTranscription: !HOSTED_MODE,
+      vocabEditing: true,
+      cloudUploadIntake: false,
+    },
+  };
+}
+
+function seedFile(target, fallback) {
+  if (fs.existsSync(target) || !fs.existsSync(fallback)) return;
+  fs.copyFileSync(fallback, target);
+}
+
+function ensureRuntimeState() {
+  fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
+  if (!fs.existsSync(LOG_FILE)) fs.writeFileSync(LOG_FILE, "");
+
+  fs.mkdirSync(path.dirname(CONFIG_FILE), { recursive: true });
+  fs.mkdirSync(DEFAULT_NOTES_DIR, { recursive: true });
+
+  fs.mkdirSync(VOCAB_DIR, { recursive: true });
+  seedFile(path.join(VOCAB_DIR, "glossary.md"), path.join(REPO_VOCAB_DIR, "glossary.md"));
+  seedFile(path.join(VOCAB_DIR, "names.md"), path.join(REPO_VOCAB_DIR, "names.md"));
+  seedFile(path.join(VOCAB_DIR, "custom-terms.md"), path.join(REPO_VOCAB_DIR, "custom-terms.md"));
+}
 
 function currentServiceLabel() {
+  if (HOSTED_MODE) return PRIMARY_SERVICE_LABEL;
   if (isDaemonRunningFor(PRIMARY_SERVICE_LABEL) || fs.existsSync(PRIMARY_PLIST_FILE)) return PRIMARY_SERVICE_LABEL;
   if (isDaemonRunningFor(LEGACY_SERVICE_LABEL) || fs.existsSync(LEGACY_PLIST_FILE)) return LEGACY_SERVICE_LABEL;
   return PRIMARY_SERVICE_LABEL;
 }
 
 function isDaemonRunningFor(label) {
+  if (HOSTED_MODE || process.platform !== "darwin") return false;
   try {
     return execSync(`launchctl list ${label} 2>/dev/null`, { encoding: "utf8" }).includes('"PID"');
   } catch {
@@ -60,15 +108,66 @@ function cfg() {
   try {
     return JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
   } catch {
-    return { output_dir: path.join(HOME, "meeting-notes"), watch_downloads: true };
+    return { output_dir: DEFAULT_NOTES_DIR, watch_downloads: !HOSTED_MODE };
   }
 }
 
 function notesDir() {
-  return cfg().output_dir || path.join(HOME, "meeting-notes");
+  return process.env.MERRYNOTE_NOTES_DIR || cfg().output_dir || DEFAULT_NOTES_DIR;
+}
+
+const GOVERNANCE_PATTERNS = [
+  /예산/,
+  /비용/,
+  /승인/,
+  /리스크/,
+  /윤리/,
+  /데이터(?:\s*세트|셋)/,
+  /준비도/,
+];
+
+function extractMarkdownSection(content, headingPattern) {
+  const headingRe = new RegExp(`^##\\s+${headingPattern}\\s*$`);
+  const lines = content.split("\n");
+  const collected = [];
+  let inSection = false;
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!inSection) {
+      if (headingRe.test(line)) inSection = true;
+      continue;
+    }
+    if (/^##\s+/.test(line)) break;
+    collected.push(rawLine);
+  }
+
+  return collected.join("\n").trim();
+}
+
+function countSectionItems(section) {
+  if (!section) return 0;
+  return section
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => /^-\s+/.test(line) || /^\d+\.\s+/.test(line))
+    .length;
+}
+
+function governanceFlagCount(content) {
+  return GOVERNANCE_PATTERNS.reduce((count, pattern) => count + (pattern.test(content) ? 1 : 0), 0);
+}
+
+function noteSignals(content) {
+  const decisions = countSectionItems(extractMarkdownSection(content, "결정 사항"));
+  const actionItems = countSectionItems(extractMarkdownSection(content, "액션 아이템"));
+  const openItems = countSectionItems(extractMarkdownSection(content, "미결 사항(?:\\s*\\/\\s*추가 논의 필요)?"));
+  const governanceFlags = governanceFlagCount(content);
+  return { decisions, actionItems, openItems, governanceFlags };
 }
 
 function watchedFolders() {
+  if (HOSTED_MODE) return [];
   const config = cfg();
   const folders = [PRIMARY_ICLOUD_INBOX];
   if (fs.existsSync(LEGACY_ICLOUD_INBOX)) folders.push(LEGACY_ICLOUD_INBOX);
@@ -89,8 +188,7 @@ function broadcast(type, data) {
   }
 }
 
-fs.mkdirSync(path.dirname(LOG_FILE), { recursive: true });
-if (!fs.existsSync(LOG_FILE)) fs.writeFileSync(LOG_FILE, "");
+ensureRuntimeState();
 let logPos = fs.statSync(LOG_FILE).size;
 fs.watch(LOG_FILE, () => {
   try {
@@ -131,6 +229,7 @@ function getNotes() {
       const content = fs.readFileSync(fp, "utf8");
       const words = content.trim().split(/\s+/).length;
       const titleMatch = content.match(/^#\s+(.+)/m);
+      const signals = noteSignals(content);
       return {
         file,
         title: titleMatch ? titleMatch[1].trim() : file.replace(/\.md$/, ""),
@@ -138,6 +237,7 @@ function getNotes() {
         words,
         mtime: stat.mtimeMs,
         size: stat.size,
+        ...signals,
       };
     })
     .sort((a, b) => b.mtime - a.mtime);
@@ -146,6 +246,10 @@ function getNotes() {
 function getStats() {
   const notes = getNotes();
   const totalWords = notes.reduce((sum, note) => sum + note.words, 0);
+  const totalDecisions = notes.reduce((sum, note) => sum + (note.decisions || 0), 0);
+  const totalActionItems = notes.reduce((sum, note) => sum + (note.actionItems || 0), 0);
+  const totalOpenItems = notes.reduce((sum, note) => sum + (note.openItems || 0), 0);
+  const totalGovernanceFlags = notes.reduce((sum, note) => sum + (note.governanceFlags || 0), 0);
   const byMonth = {};
   const now = new Date();
   const thisMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -158,7 +262,16 @@ function getStats() {
     if (monthKey === thisMonthKey) thisMonth += 1;
   }
 
-  return { total: notes.length, thisMonth, totalWords, byMonth };
+  return {
+    total: notes.length,
+    thisMonth,
+    totalWords,
+    totalDecisions,
+    totalActionItems,
+    totalOpenItems,
+    totalGovernanceFlags,
+    byMonth,
+  };
 }
 
 function searchNotes(query) {
@@ -205,6 +318,15 @@ function router(req, res) {
   const p = raw.pathname;
   const q = Object.fromEntries(raw.searchParams);
   const method = req.method.toUpperCase();
+
+  if (p === "/healthz") {
+    return jsonRes(res, {
+      ok: true,
+      runtime: runtimeInfo(),
+      notesDir: notesDir(),
+      vocabDir: VOCAB_DIR,
+    });
+  }
 
   if (method === "OPTIONS") {
     res.writeHead(204);
@@ -258,16 +380,22 @@ function router(req, res) {
 }
 
 function handleApi(p, method, q, body, res) {
+  if (p === "/api/runtime" && method === "GET") {
+    return jsonRes(res, runtimeInfo());
+  }
+
   if (p === "/api/status" && method === "GET") {
     const config = cfg();
     return jsonRes(res, {
       running: isDaemonRunning(),
       watching: watchedFolders(),
-      outputDir: config.output_dir,
+      outputDir: notesDir(),
+      runtime: runtimeInfo(),
     });
   }
 
   if (p === "/api/daemon/start" && method === "POST") {
+    if (HOSTED_MODE) return jsonRes(res, { ok: false, error: "Hosted mode does not support launchctl daemon control." }, 501);
     try {
       execSync(`launchctl load "${PLIST_FILE}" 2>/dev/null`);
       return jsonRes(res, { ok: true });
@@ -277,6 +405,7 @@ function handleApi(p, method, q, body, res) {
   }
 
   if (p === "/api/daemon/stop" && method === "POST") {
+    if (HOSTED_MODE) return jsonRes(res, { ok: false, error: "Hosted mode does not support launchctl daemon control." }, 501);
     try {
       execSync(`launchctl unload "${PLIST_FILE}" 2>/dev/null`);
       return jsonRes(res, { ok: true });
@@ -332,6 +461,13 @@ function handleApi(p, method, q, body, res) {
   if (p === "/api/search" && method === "GET") return jsonRes(res, searchNotes(q.q));
 
   if (p === "/api/transcribe" && method === "POST") {
+    if (HOSTED_MODE) {
+      return jsonRes(
+        res,
+        { ok: false, error: "Hosted mode does not support server-local file path transcription yet. Ship browser upload + worker first." },
+        501
+      );
+    }
     const file = body.file;
     if (!file) return jsonRes(res, { error: "file required" }, 400);
     if (!fs.existsSync(file)) return jsonRes(res, { error: `파일 없음: ${file}` }, 400);
@@ -343,6 +479,7 @@ function handleApi(p, method, q, body, res) {
   }
 
   if (p === "/api/record/start" && method === "POST") {
+    if (HOSTED_MODE) return jsonRes(res, { ok: false, error: "Hosted mode cannot control macOS Voice Memos." }, 501);
     exec(`osascript "${path.join(RAYCAST_DIR, "record-meeting-helper.applescript")}"`, (err) => {
       if (err) broadcast("log", { line: `❌ 녹음 시작 실패: ${err.message}` });
       else broadcast("log", { line: "🎙️  녹음 시작됨 (Voice Memos)" });
@@ -351,6 +488,7 @@ function handleApi(p, method, q, body, res) {
   }
 
   if (p === "/api/record/stop" && method === "POST") {
+    if (HOSTED_MODE) return jsonRes(res, { ok: false, error: "Hosted mode cannot stop Voice Memos or run local Claude CLI." }, 501);
     const title = body.title || "회의";
     broadcast("log", { line: `⏹  녹음 종료 중: "${title}"` });
     exec(`osascript "${path.join(RAYCAST_DIR, "finish-meeting-helper.applescript")}" "${title}"`, (err, stdout) => {
@@ -400,9 +538,10 @@ function handleApi(p, method, q, body, res) {
   return jsonRes(res, { error: "Not found" }, 404);
 }
 
-http.createServer(router).listen(PORT, "127.0.0.1", () => {
+http.createServer(router).listen(PORT, HOST, () => {
   watchNotes();
   console.log(`\n🎙️  ${BRAND} dashboard`);
-  console.log(`   \x1b[36mhttp://localhost:${PORT}\x1b[0m\n`);
-  exec(`open http://localhost:${PORT}`);
+  console.log(`   \x1b[36mhttp://${HOST === "0.0.0.0" ? "localhost" : HOST}:${PORT}\x1b[0m`);
+  console.log(`   mode: ${runtimeInfo().mode}\n`);
+  if (!HOSTED_MODE && process.platform === "darwin") exec(`open http://localhost:${PORT}`);
 });
